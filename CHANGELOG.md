@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.23 — Factory inventory
+
+- Held switches the list to bags, bank, and mail. Each item has one disposition, a text badge, and a colour. The tooltip says what it is worth and why.
+- Disenchant is used only when the existing engine has a yield. Missing or stale prices stay unknown or wait. Bags are not rearranged.
+
 ## 0.1.22 — Factory mail
 
 - Mail is classified from the invoice, and from the client's own auction subject formats when those globals exist.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.29 — Post the finished stack
+
+- After a conversion, transmute, or craft is in your bags, What to do now keeps a row that says to post it, with the bag count and the P25 price after the auction-house cut. The row stays when there is nothing left to buy.
+- Post sits on that action row and lists one planned stack. The click tells you to open the Auction House when it is closed. When it is open, that same click puts the stack in the sell slot and posts it.
+
 ## 0.1.28 — Window layout
 
 - The /og window is split into Auction, Options, the action list, and Mail. Held is now In bags, Collect Gold is now Take gold, and Factory Sweep is now Take mail. The clicks are unchanged.

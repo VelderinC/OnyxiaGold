@@ -958,6 +958,18 @@ function UI:Create()
     buy:Hide()
     row.buyButton = buy
 
+    local post = CreateFrame("Button", "OnyxiaGoldRowPost" .. i, row, "UIPanelButtonTemplate")
+    post:SetWidth(56)
+    post:SetHeight(22)
+    post:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+    post:SetText("Post")
+    post:SetFrameLevel(row:GetFrameLevel() + 2)
+    post:SetScript("OnClick", function()
+      UI:OnPostClick(row)
+    end)
+    post:Hide()
+    row.postButton = post
+
     rows[i] = row
   end
 
@@ -1188,6 +1200,9 @@ local function clearRow(row)
   if row.buyButton then
     row.buyButton:Hide()
   end
+  if row.postButton then
+    row.postButton:Hide()
+  end
   row:Hide()
 end
 
@@ -1302,6 +1317,8 @@ function UI:ShowActionTooltip(row)
     GameTooltip:AddLine("Visit a mailbox and collect gold. The addon will not loot mail.", 1, 0.85, 0.4, 1)
   elseif action.kind == "BUY_AND_CRAFT" then
     GameTooltip:AddLine("Click the row to search the Auction House. Buy purchases one listing at or under the stop.", 1, 0.85, 0.4, 1)
+  elseif action.kind == "POST" then
+    GameTooltip:AddLine("Post lists one stack. Open the Auction House, then click Post.", 1, 0.85, 0.4, 1)
   else
     GameTooltip:AddLine("Planning only — OnyxiaGold will not buy or craft for you.", 0.55, 0.55, 0.55, 1)
   end
@@ -1627,6 +1644,146 @@ function UI:OnBuyClick(row)
   self:UpdateList()
 end
 
+local function auctionHouseOpen()
+  return AuctionFrame and AuctionFrame.IsShown and AuctionFrame:IsShown() and true or false
+end
+
+-- Largest unlocked bag stack of this item. Prefers a stack that covers need.
+local function bagStackForPost(itemID, need)
+  itemID = tonumber(itemID)
+  need = tonumber(need) or 1
+  if need < 1 then
+    need = 1
+  end
+  if not itemID or type(GetContainerNumSlots) ~= "function" or type(GetContainerItemLink) ~= "function" then
+    return nil
+  end
+  local bagSlots = NUM_BAG_SLOTS or 4
+  local bestBag, bestSlot, bestCount
+  for bag = 0, bagSlots do
+    local slots = GetContainerNumSlots(bag)
+    if slots and slots > 0 then
+      for slot = 1, slots do
+        local link = GetContainerItemLink(bag, slot)
+        local id = OnyxiaGold.ParseItemID(link)
+        if id == itemID then
+          local _, count, locked = GetContainerItemInfo(bag, slot)
+          count = tonumber(count) or 0
+          local taken = locked == 1 or locked == true
+          if not taken and count > 0 then
+            if count >= need then
+              return bag, slot, count
+            end
+            if not bestCount or count > bestCount then
+              bestBag, bestSlot, bestCount = bag, slot, count
+            end
+          end
+        end
+      end
+    end
+  end
+  return bestBag, bestSlot, bestCount
+end
+
+function UI:PaintPostRow(row, action)
+  local button = row and row.postButton
+  if button then
+    button:Hide()
+  end
+  if not button or not action or action.kind ~= "POST" then
+    return
+  end
+  button:Show()
+end
+
+-- Hardware click. Pickup, the sell slot, and StartAuction stay in this handler.
+function UI:OnPostClick(row)
+  local action = row and row.action
+  if not action or action.kind ~= "POST" then
+    return
+  end
+  if not auctionHouseOpen() then
+    self:SetStatus("Open the Auction House to post.")
+    return
+  end
+  local itemID = tonumber(action.outputItemID)
+  local stack = tonumber(action.stackSize) or 1
+  if stack < 1 then
+    stack = 1
+  end
+  local saleUnit = tonumber(action.saleUnit) or 0
+  if not itemID or saleUnit < 1 then
+    self:SetStatus("No sale price for that stack.")
+    return
+  end
+  if type(PickupContainerItem) ~= "function"
+    or type(ClickAuctionSellItemButton) ~= "function"
+    or type(StartAuction) ~= "function" then
+    self:SetStatus("The auction house did not take that post.")
+    return
+  end
+  local bag, slot, count = bagStackForPost(itemID, stack)
+  if not bag then
+    if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
+      OnyxiaGold.Inventory:ScanBags()
+    end
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
+    end
+    self:Refresh()
+    self:SetStatus("That item is not in your bags.")
+    return
+  end
+  local postCount = stack
+  if postCount > count then
+    postCount = count
+  end
+  if postCount < 1 then
+    self:SetStatus("That item is not in your bags.")
+    return
+  end
+  local buyout = math.floor(saleUnit * postCount + 0.5)
+  local bid = buyout
+  local duration = tonumber(action.duration) or 2
+  if duration ~= 1 and duration ~= 2 and duration ~= 3 then
+    duration = 2
+  end
+  if type(GetAuctionSellItemInfo) == "function" then
+    local existing = GetAuctionSellItemInfo()
+    if type(existing) == "string" and existing ~= "" then
+      ClickAuctionSellItemButton()
+      if type(ClearCursor) == "function" then
+        ClearCursor()
+      end
+    end
+  end
+  if type(CursorHasItem) == "function" and CursorHasItem() and type(ClearCursor) == "function" then
+    ClearCursor()
+  end
+  PickupContainerItem(bag, slot)
+  if type(CursorHasItem) == "function" and not CursorHasItem() then
+    self:SetStatus("Could not pick up that stack.")
+    return
+  end
+  ClickAuctionSellItemButton()
+  StartAuction(bid, buyout, duration, postCount, 1)
+  if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
+    OnyxiaGold.Log:Debug("UI", string.format(
+      "StartAuction item=%d count=%d bid=%d buyout=%d duration=%d",
+      itemID, postCount, bid, buyout, duration
+    ))
+  end
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
+    OnyxiaGold.Inventory:ScanBags()
+  end
+  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    OnyxiaGold.ActionPlanner:Refresh()
+  end
+  self:Refresh()
+  local postedName = itemID and OnyxiaGold.Data.GetItemName(itemID) or "item"
+  self:SetStatus(string.format("Posted %d %s.", postCount, postedName))
+end
+
 function UI:AcceptHouseConfirm()
   local names = {
     BUYOUT_AUCTION = true,
@@ -1735,6 +1892,9 @@ function UI:UpdateInventoryList()
       if row.buyButton then
         row.buyButton:Hide()
       end
+      if row.postButton then
+        row.postButton:Hide()
+      end
       row.cells.name:SetText(tostring(item.name or item.itemID) .. " x" .. tostring(item.count or 0))
       setRGB(row.cells.name, 1, 1, 1)
       if item.worth then
@@ -1805,10 +1965,17 @@ function UI:UpdateList()
       if previewRow and row.buyButton then
         row.buyButton:Hide()
       end
+      if previewRow and row.postButton then
+        row.postButton:Hide()
+      end
       self:PaintBuyRow(row, action)
+      self:PaintPostRow(row, action)
     else
       if row.buyButton then
         row.buyButton:Hide()
+      end
+      if row.postButton then
+        row.postButton:Hide()
       end
       clearRow(row)
     end

@@ -2,14 +2,15 @@
   OnyxiaGold.AuctionStop
   Stop price for the auction page he is looking at.
 
-  Marks each row under the stop, over it, a bid, or a scrap.
-  Fills a post price at or above the floor. He presses Blizzard's button.
-  Query stops when the visible page is entirely over the stop.
+  Marks each row under the stop, over it, or a bid. Small stacks are lots,
+  not scrap. Opening the house refreshes personal state and does not query,
+  bind a row, or fill a post price.
+  A full page does not end the search. Warmane browse order is unverified,
+  so paging continues until the page is short or the page cap is hit.
   This view queries one item name, page by page, and only from auction events.
 
-  A buy row runs one live name query. The cheapest listing at or under the
-  stop, whose stack still fits the remaining quantity, is offered from the
-  live page. The UI button is the only PlaceAuctionBid, and it buys one.
+  A buy row runs one live name query. Lots.Select chooses the whole listing.
+  The UI button is the only PlaceAuctionBid, and it buys that one lot.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -187,11 +188,26 @@ function Stop.DecidePost(itemID, floorUnit, stackCount)
     }
   end
   local unit = floorUnit
-  if market and market > floorUnit then
-    local under = market - 1
-    if under >= floorUnit then
-      unit = under
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.PostPolicy then
+    local policy = OnyxiaGold.Lots.PostPolicy({
+      economicFloor = floorUnit,
+      marketMinimum = market,
+      ownMinimum = own,
+      stackSize = stackCount,
+      liveValidated = true,
+    })
+    if policy.decision == "leave" then
+      return {
+        decision = "leave",
+        postCopper = nil,
+        line = "Leave it. Your auction is already the cheapest. " .. depositLine,
+      }
     end
+    if policy.targetPrice and policy.targetPrice > 0 then
+      unit = policy.targetPrice
+    end
+  elseif market and market > floorUnit then
+    unit = market
   end
   if own and unit < own and (not market or market >= own) then
     return {
@@ -226,22 +242,15 @@ function Stop.Classify(auction, stopUnit, recipeCount, remaining)
   local current = bidAmount > 0 and bidAmount or minBid
   local stopText = money(stopUnit)
 
-  if recipeCount > 1 and count < recipeCount then
-    return {
-      verb = "scrap",
-      overStop = false,
-      loss = 0,
-      locksCash = false,
-      line = string.format(
-        "Scrap · stack %d cannot fill a recipe of %d · stop %s · %d more",
-        count, recipeCount, stopText, remaining
-      ),
-    }
-  end
-
   local hasBuyout = buyout > 0
   local unit = hasBuyout and math.floor(buyout / count) or 0
-  local bidUnit = math.floor(current / count)
+  local nextBid = current
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.RequiredBid then
+    nextBid = OnyxiaGold.Lots.RequiredBid(minBid, bidAmount, auction.minIncrement)
+  elseif bidAmount > 0 then
+    nextBid = bidAmount
+  end
+  local bidUnit = math.floor(nextBid / count)
   local verb = "under"
   local loss = 0
   local locksCash = false
@@ -285,29 +294,37 @@ function Stop.Classify(auction, stopUnit, recipeCount, remaining)
   }
 end
 
-function Stop.JudgePage(rows)
+-- Warmane page order is not verified. A page that is entirely over the stop
+-- does not end the search. The caller stops on an empty or short page, or at the cap.
+function Stop.JudgePage(rows, page, pageCap)
   local n = table.getn(rows or {})
+  page = tonumber(page) or 0
+  pageCap = tonumber(pageCap) or PAGE_CAP
   if n < 1 then
-    return { queryNext = false, paging = false }
+    return { queryNext = false, paging = false, incomplete = false }
   end
-  for i = 1, n do
-    if not rows[i].overStop then
-      return { queryNext = true, paging = true }
-    end
+  local full = n >= (OnyxiaGold.Config and OnyxiaGold.Config.PageSize or 50)
+  local cont, incomplete = true, false
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ShouldContinuePaging then
+    cont, incomplete = OnyxiaGold.Lots.ShouldContinuePaging(page, pageCap, full)
+  elseif page + 1 >= pageCap then
+    cont = false
+    incomplete = true
   end
-  return { queryNext = false, paging = false }
+  return { queryNext = cont, paging = cont, incomplete = incomplete }
 end
 
--- Cheapest live listing at or under the stop whose stack still fits.
--- rows are already limited to the wanted item. Returns offer, sawUnderStop.
+-- One buy algorithm: the same whole-lot selector the planner uses.
+-- The offer is the first lot in that plan. A stack may be larger than the
+-- recipe still needs. Bids are not offers.
 function Stop.PickListing(rows, stopUnit, remaining)
   stopUnit = tonumber(stopUnit) or 0
   remaining = tonumber(remaining) or 0
-  local best
   local sawUnder = false
   if type(rows) ~= "table" or remaining < 1 then
     return nil, false
   end
+  local lots = {}
   for i = 1, table.getn(rows) do
     local row = rows[i]
     local count = tonumber(row and row.count) or 0
@@ -315,32 +332,35 @@ function Stop.PickListing(rows, stopUnit, remaining)
     local index = tonumber(row and row.index)
     if index and index >= 1 and count > 0 and buyout > 0 then
       local unit = math.floor(buyout / count)
-      if unit <= stopUnit then
+      if unit > 0 and unit <= stopUnit then
         sawUnder = true
-        if count <= remaining then
-          local cheaper = false
-          if not best or unit < best.unit then
-            cheaper = true
-          elseif unit == best.unit and buyout < best.buyout then
-            cheaper = true
-          elseif unit == best.unit and buyout == best.buyout and index < best.index then
-            cheaper = true
-          end
-          if cheaper then
-            best = {
-              index = index,
-              count = count,
-              buyout = buyout,
-              unit = unit,
-              name = (row and row.name) or "",
-              itemID = row and row.itemID,
-            }
-          end
-        end
+        table.insert(lots, {
+          p = unit,
+          s = count,
+          cash = buyout,
+          index = index,
+          itemID = row and row.itemID,
+          name = (row and row.name) or "",
+        })
       end
     end
   end
-  return best, sawUnder
+  if not OnyxiaGold.Lots or not OnyxiaGold.Lots.Select then
+    return nil, sawUnder
+  end
+  local quote = OnyxiaGold.Lots.Select(lots, remaining, nil)
+  local lot = quote and quote.complete and quote.selectedLots and quote.selectedLots[1]
+  if not lot or not lot.index then
+    return nil, sawUnder
+  end
+  return {
+    index = lot.index,
+    count = lot.s,
+    buyout = lot.cash,
+    unit = lot.p,
+    name = lot.name or "",
+    itemID = lot.itemID,
+  }, sawUnder
 end
 
 local function boughtKey(itemID, actionIndex)
@@ -405,7 +425,7 @@ function Stop:ReadLiveRows()
   local want = tonumber(self.itemID)
   local player = type(UnitName) == "function" and UnitName("player") or nil
   for i = 1, n do
-    local name, _, count, _, _, _, _, _, buyout, _, _, owner = GetAuctionItemInfo("list", i)
+    local name, _, count, _, _, _, minBid, minIncrement, buyout, bidAmount, _, owner = GetAuctionItemInfo("list", i)
     local itemID = OnyxiaGold.ParseItemID(GetAuctionItemLink("list", i))
     if want and itemID == want then
       local mine = player and type(owner) == "string" and owner ~= "" and owner == player
@@ -415,6 +435,9 @@ function Stop:ReadLiveRows()
           name = (type(name) == "string" and name ~= "" and name) or self.queryName or "",
           count = tonumber(count) or 0,
           buyout = tonumber(buyout) or 0,
+          minBid = tonumber(minBid) or 0,
+          minIncrement = tonumber(minIncrement) or 0,
+          bidAmount = tonumber(bidAmount) or 0,
           itemID = itemID,
         })
       end
@@ -451,10 +474,11 @@ function Stop:CapturePageRows()
   end
   local n = listSize()
   for i = 1, n do
-    local _, _, count, _, _, _, minBid, _, buyout, bidAmount = GetAuctionItemInfo("list", i)
+    local _, _, count, _, _, _, minBid, minIncrement, buyout, bidAmount = GetAuctionItemInfo("list", i)
     table.insert(rows, self.Classify({
       count = tonumber(count) or 1,
       minBid = tonumber(minBid) or 0,
+      minIncrement = tonumber(minIncrement) or 0,
       buyout = tonumber(buyout) or 0,
       bidAmount = tonumber(bidAmount) or 0,
     }, self.stopUnit or 0, self.recipeCount or 1, self.remaining or 0))
@@ -511,10 +535,27 @@ function Stop:ReadBuyPage()
       ))
     end
   else
+    local pageSize = OnyxiaGold.Config and OnyxiaGold.Config.PageSize or 50
+    local full = listSize() >= pageSize
+    local cont, incomplete = false, false
+    if OnyxiaGold.Lots and OnyxiaGold.Lots.ShouldContinuePaging then
+      cont, incomplete = OnyxiaGold.Lots.ShouldContinuePaging(self.page or 0, PAGE_CAP, full)
+    end
+    if cont and self.queryName and self.queryName ~= "" and type(QueryAuctionItems) == "function" then
+      self.page = (self.page or 0) + 1
+      self.buyPhase = "search"
+      self.buyStatus = "search"
+      self.offer = nil
+      QueryAuctionItems(self.queryName, nil, nil, nil, nil, nil, self.page, nil, nil)
+      self:RefreshBuyRow()
+      return
+    end
     self.offer = nil
     self.buyPhase = "idle"
-    if sawUnder then
-      self.buyStatus = "large"
+    if incomplete then
+      self.buyStatus = "incomplete"
+    elseif sawUnder then
+      self.buyStatus = "none"
     else
       self.buyStatus = "none"
     end
@@ -642,7 +683,7 @@ function Stop:LiveBid()
     return nil
   end
   local unit = math.floor(buyout / count)
-  if unit > (tonumber(self.stopUnit) or 0) or count > (tonumber(self.remaining) or 0) then
+  if unit > (tonumber(self.stopUnit) or 0) then
     self.buyPhase = "idle"
     self.offer = nil
     self.buyStatus = "none"
@@ -693,14 +734,14 @@ local function costOfCount(itemID, count)
     return 0
   end
   local session = OnyxiaGold.SessionState
-  if session and session.IsActive and session:IsActive() and session.AcquisitionCost then
-    local part = session:AcquisitionCost(itemID, count)
+  if session and session.IsActive and session:IsActive() and session.EconomicCost then
+    local part = session:EconomicCost(itemID, count)
     if part then
       return part
     end
   end
-  if OnyxiaGold.Prices and OnyxiaGold.Prices.GetAcquisitionCost then
-    local part = OnyxiaGold.Prices:GetAcquisitionCost(itemID, count)
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.GetEconomicAcquisitionCost then
+    local part = OnyxiaGold.Prices:GetEconomicAcquisitionCost(itemID, count)
     if part then
       return part
     end
@@ -814,7 +855,7 @@ function Stop:OnListUpdate()
     return
   end
   local rows = self:CapturePageRows()
-  local decision = self.JudgePage(rows)
+  local decision = self.JudgePage(rows, self.page, PAGE_CAP)
   self:PaintCaptured(rows)
   if decision.queryNext and (self.page or 0) + 1 < PAGE_CAP then
     self.page = (self.page or 0) + 1
@@ -826,35 +867,13 @@ function Stop:OnListUpdate()
 end
 
 function Stop:OnHouseShown()
+  -- Refresh personal state only. Do not bind a row, query, page, or fill a post price.
+  self.paging = false
   if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
     return
   end
   if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
     OnyxiaGold.ActionPlanner:Refresh()
-  end
-  local actions = {}
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetActions then
-    actions = OnyxiaGold.ActionPlanner:GetActions() or {}
-  end
-  local bound = false
-  for i = 1, table.getn(actions) do
-    if self:Bind(actions[i]) then
-      bound = true
-      break
-    end
-  end
-  if not bound then
-    self.paging = false
-    return
-  end
-  self.page = 0
-  self.paging = true
-  self:SendQuery()
-  if self.postDecision == "post" and self.postCopper and OnyxiaGold.UI and OnyxiaGold.UI.ApplyPostPrice then
-    OnyxiaGold.UI:ApplyPostPrice(self.postCopper)
-  end
-  if self.postLine and OnyxiaGold.UI and OnyxiaGold.UI.ShowPostRow then
-    OnyxiaGold.UI:ShowPostRow(self.postLine)
   end
 end
 

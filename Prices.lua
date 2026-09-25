@@ -14,12 +14,13 @@
       Used by deterministic engines. Conservative vs raw median.
 
   Depth lives on latest records only as:
-    depth = { { p = copper, q = units, n = auctions }, ... } cheapest first
+    depth = { { p = copper, q = units, n = auctions, s = stack }, ... }
 
-  buyoutQuantity is the full instant-buy count.
-  depthCoveredQuantity is how many of those units the persisted depth still
-  represents after MaxDepthLevelsPerItem truncation.
-  GetAcquisitionQuote will not price past depthCoveredQuantity.
+  A level is n whole auctions of stack s. GetAcquisitionQuote buys whole
+  auctions. cashRequired is the copper that leaves the purse.
+  economicConsumedCost is the cost of the units the recipe uses.
+  Leftover units keep leftoverAssetValue. The quote does not price past
+  depthCoveredQuantity, and it does not split a stack.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -98,30 +99,12 @@ function Prices:GetDepthCoveredQuantity(itemID)
 end
 
 -- Cheapest persisted levels, stopped at depthCoveredQuantity.
+-- Whole auctions only. Stack size s is kept.
 local function depthWithinCoverage(depth, covered)
-  local out = {}
-  local left = tonumber(covered) or 0
-  if type(depth) ~= "table" or left <= 0 then
-    return out
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.WholeLevels then
+    return OnyxiaGold.Lots.WholeLevels(depth, covered)
   end
-  for i = 1, table.getn(depth) do
-    if left <= 0 then
-      break
-    end
-    local lvl = depth[i]
-    local p = lvl and (lvl.p or lvl.unitPrice)
-    local q = lvl and (lvl.q or lvl.quantity)
-    local n = (lvl and (lvl.n or lvl.auctions)) or 1
-    if p and p > 0 and q and q > 0 then
-      local use = q
-      if use > left then
-        use = left
-      end
-      table.insert(out, { p = p, q = use, n = n })
-      left = left - use
-    end
-  end
-  return out
+  return {}, 0
 end
 
 function Prices:GetAuctionCount(itemID)
@@ -344,83 +327,62 @@ function Prices.PercentileFromDepth(depth, buyoutQuantity, percentile)
   return lastPrice
 end
 
-function Prices:GetAcquisitionQuote(itemID, quantity)
-  quantity = math.floor(tonumber(quantity) or 0)
-  local live = record(itemID)
-  if live and live.source == "external" then
-    return {
-      requestedQuantity = quantity,
-      filledQuantity = 0,
-      totalCost = 0,
-      averageUnitCost = nil,
-      marginalUnitCost = nil,
-      levelsConsumed = 0,
-      complete = false,
-      depthCoveredQuantity = 0,
-    }
-  end
-  local covered = self:GetDepthCoveredQuantity(itemID)
-  local quote = {
+local function emptyQuote(quantity)
+  return {
     requestedQuantity = quantity,
+    requestedUnits = quantity,
     filledQuantity = 0,
+    purchasedUnits = 0,
+    consumedUnits = 0,
+    excessUnits = 0,
     totalCost = 0,
+    cashRequired = 0,
+    economicConsumedCost = 0,
+    leftoverAssetValue = 0,
     averageUnitCost = nil,
     marginalUnitCost = nil,
     levelsConsumed = 0,
+    selectedLots = {},
     complete = false,
-    depthCoveredQuantity = covered,
+    depthCoveredQuantity = 0,
   }
+end
+
+function Prices:GetAcquisitionQuote(itemID, quantity, constraints)
+  quantity = math.floor(tonumber(quantity) or 0)
+  local live = record(itemID)
+  if live and live.source == "external" then
+    return emptyQuote(quantity)
+  end
+  local covered = self:GetDepthCoveredQuantity(itemID)
   if quantity <= 0 then
+    local quote = emptyQuote(quantity)
     quote.complete = true
     quote.averageUnitCost = 0
-    quote.totalCost = 0
+    quote.depthCoveredQuantity = covered
     return quote
   end
-
-  -- Never invent a full-book quote from min * buyoutQuantity.
-  -- Persisted depth may cover only the cheapest slice of the market.
   local depth = depthWithinCoverage(self:GetDepth(itemID), covered)
-  if table.getn(depth) == 0 then
-    return quote
+  local quote
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
+    quote = OnyxiaGold.Lots.Quote(depth, quantity, constraints)
+  else
+    quote = emptyQuote(quantity)
   end
-
-  local need = quantity
-  for i = 1, table.getn(depth) do
-    if need <= 0 then
-      break
-    end
-    local lvl = depth[i]
-    local p = lvl and (lvl.p or lvl.unitPrice)
-    local q = lvl and (lvl.q or lvl.quantity)
-    if p and p > 0 and q and q > 0 then
-      local take = q
-      if take > need then
-        take = need
-      end
-      quote.totalCost = quote.totalCost + take * p
-      quote.filledQuantity = quote.filledQuantity + take
-      quote.marginalUnitCost = p
-      quote.levelsConsumed = quote.levelsConsumed + 1
-      need = need - take
-    end
-  end
-
-  if quote.filledQuantity > 0 then
-    quote.averageUnitCost = math.floor(quote.totalCost / quote.filledQuantity)
-  end
-  -- complete only when the requested quantity fits inside covered depth.
-  quote.complete = (quantity <= covered) and (quote.filledQuantity >= quantity)
+  quote.depthCoveredQuantity = covered
+  quote.requestedQuantity = quantity
   if OnyxiaGold.Log and OnyxiaGold.Log.Trace then
     OnyxiaGold.Log:Trace("Prices", string.format(
-      "quote item=%s qty=%d filled=%d covered=%d cost=%s avg=%s marg=%s levels=%d complete=%s",
-      tostring(itemID), quantity, quote.filledQuantity, covered,
-      tostring(quote.totalCost), tostring(quote.averageUnitCost),
-      tostring(quote.marginalUnitCost), quote.levelsConsumed, tostring(quote.complete)
+      "quote item=%s qty=%d bought=%s consumed=%s cash=%s economic=%s complete=%s",
+      tostring(itemID), quantity, tostring(quote.purchasedUnits),
+      tostring(quote.consumedUnits), tostring(quote.cashRequired),
+      tostring(quote.economicConsumedCost), tostring(quote.complete)
     ))
   end
   return quote
 end
 
+-- Copper that actually leaves the purse. Nil when the lots cannot cover.
 function Prices:GetAcquisitionCost(itemID, quantity)
   quantity = tonumber(quantity) or 1
   if quantity <= 0 then
@@ -430,10 +392,25 @@ function Prices:GetAcquisitionCost(itemID, quantity)
   if not quote or not quote.complete then
     return nil
   end
-  return quote.totalCost
+  return quote.cashRequired or quote.totalCost
 end
 
--- Walk the buyout book in batch-sized chunks. O(depth levels), not O(units).
+-- Cost of the units a recipe would consume. Leftover lots stay an asset.
+function Prices:GetEconomicAcquisitionCost(itemID, quantity)
+  quantity = tonumber(quantity) or 1
+  if quantity <= 0 then
+    return 0
+  end
+  local quote = self:GetAcquisitionQuote(itemID, quantity)
+  if not quote or not quote.complete then
+    return nil
+  end
+  return quote.economicConsumedCost
+end
+
+-- Stop at the first batch whose marginal economic cost is not under the net.
+-- Whole lots. Independent quotes from the full book, so leftover is not
+-- charged twice and is not discarded.
 function Prices:GetMaxProfitableBatches(itemID, unitsPerBatch, netPerBatch)
   unitsPerBatch = math.floor(tonumber(unitsPerBatch) or 0)
   netPerBatch = tonumber(netPerBatch) or 0
@@ -445,80 +422,37 @@ function Prices:GetMaxProfitableBatches(itemID, unitsPerBatch, netPerBatch)
   if covered < unitsPerBatch then
     return nil
   end
-  local depth = depthWithinCoverage(self:GetDepth(itemID), covered)
-  if table.getn(depth) == 0 then
-    return nil
-  end
 
-  local leftoverUnits = 0
-  local leftoverCost = 0
   local batches = 0
-  local totalCost = 0
-  local firstCost
-
-  local function takeBatch(cost)
-    if cost >= netPerBatch then
-      return false
+  local previous = 0
+  local guard = 0
+  while guard < 200 do
+    guard = guard + 1
+    local qty = (batches + 1) * unitsPerBatch
+    if qty > covered then
+      break
     end
-    if not firstCost then
-      firstCost = cost
+    local economic = self:GetEconomicAcquisitionCost(itemID, qty)
+    if not economic then
+      break
+    end
+    local marginal = economic - previous
+    if marginal >= netPerBatch then
+      break
     end
     batches = batches + 1
-    totalCost = totalCost + cost
-    return true
+    previous = economic
   end
 
-  for i = 1, table.getn(depth) do
-    local lvl = depth[i]
-    local p = lvl and (lvl.p or lvl.unitPrice)
-    local q = lvl and (lvl.q or lvl.quantity)
-    if p and p > 0 and q and q > 0 then
-      if leftoverUnits > 0 then
-        local need = unitsPerBatch - leftoverUnits
-        if q >= need then
-          local cost = leftoverCost + need * p
-          q = q - need
-          leftoverUnits = 0
-          leftoverCost = 0
-          if not takeBatch(cost) then
-            break
-          end
-        else
-          leftoverUnits = leftoverUnits + q
-          leftoverCost = leftoverCost + q * p
-          q = 0
-        end
-      end
-
-      if leftoverUnits == 0 and q > 0 then
-        local costPerBatch = p * unitsPerBatch
-        if costPerBatch >= netPerBatch then
-          break
-        end
-        local n = math.floor(q / unitsPerBatch)
-        if n > 0 then
-          if not firstCost then
-            firstCost = costPerBatch
-          end
-          batches = batches + n
-          totalCost = totalCost + n * costPerBatch
-          q = q - n * unitsPerBatch
-        end
-        leftoverUnits = q
-        leftoverCost = q * p
-      end
-    end
-  end
-
-  if batches <= 0 or not firstCost then
+  if batches <= 0 then
     return nil
   end
   return {
     batches = batches,
-    firstCost = firstCost,
-    firstProfit = netPerBatch - firstCost,
-    totalCost = totalCost,
-    totalProfit = batches * netPerBatch - totalCost,
-    averageUnitCost = math.floor(totalCost / (batches * unitsPerBatch)),
+    firstCost = self:GetEconomicAcquisitionCost(itemID, unitsPerBatch),
+    firstProfit = netPerBatch - (self:GetEconomicAcquisitionCost(itemID, unitsPerBatch) or 0),
+    totalCost = previous,
+    totalProfit = batches * netPerBatch - previous,
+    averageUnitCost = math.floor(previous / (batches * unitsPerBatch)),
   }
 end

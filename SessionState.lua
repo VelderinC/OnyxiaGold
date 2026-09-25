@@ -7,10 +7,14 @@
   The next action sees what remains.
 
   The saved market snapshot is never written. Quotes walk the clone only.
+  A buy takes whole auction lots. Purchased units enter the virtual bags,
+  the recipe consumes what it needs, and the excess stays for the next action.
   Output units already planned are remembered here so the next action sees
   a thinner visible book. That count is not a sale rate.
   Bank stock is not treated as bag stock. Cooldown groups are marked used
   for this plan only; no timing numbers are invented.
+  Temporary purchase slots are not added to later actions. Peak occupancy
+  for the action is recorded on bagPeak.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -30,6 +34,7 @@ function Session:Reset()
   self.cooldowns = {}
   self.outputUsed = {}
   self.bagSlotsUsed = 0
+  self.bagPeak = 0
 end
 
 Session:Reset()
@@ -52,32 +57,12 @@ local function copyBagSnapshot()
 end
 
 -- New level tables. Callers must not pass these back into the database.
+-- Whole auctions only. A covered cut does not invent a partial stack.
 local function cloneCoveredDepth(depth, covered)
-  local levels = {}
-  local left = tonumber(covered) or 0
-  local sum = 0
-  if type(depth) ~= "table" or left <= 0 then
-    return levels, 0
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.WholeLevels then
+    return OnyxiaGold.Lots.WholeLevels(depth, covered)
   end
-  for i = 1, table.getn(depth) do
-    if left <= 0 then
-      break
-    end
-    local lvl = depth[i]
-    local p = lvl and (lvl.p or lvl.unitPrice)
-    local q = lvl and (lvl.q or lvl.quantity)
-    local n = (lvl and (lvl.n or lvl.auctions)) or 1
-    if p and p > 0 and q and q > 0 then
-      local use = q
-      if use > left then
-        use = left
-      end
-      table.insert(levels, { p = p, q = use, n = n })
-      sum = sum + use
-      left = left - use
-    end
-  end
-  return levels, sum
+  return {}, 0
 end
 
 function Session:Begin(deployable, afterMailDeployable)
@@ -191,55 +176,44 @@ function Session:CooldownUsed(group)
   return self.cooldowns[group] and true or false
 end
 
-function Session:Quote(itemID, quantity)
+function Session:QuoteBook(book, quantity, capital)
   quantity = math.floor(tonumber(quantity) or 0)
-  local book = self:EnsureDepth(itemID)
-  local covered = book.covered or 0
-  local quote = {
-    requestedQuantity = quantity,
-    filledQuantity = 0,
-    totalCost = 0,
-    averageUnitCost = nil,
-    marginalUnitCost = nil,
-    levelsConsumed = 0,
-    complete = false,
-    depthCoveredQuantity = covered,
-  }
-  if quantity <= 0 then
-    quote.complete = true
-    quote.averageUnitCost = 0
-    quote.totalCost = 0
-    return quote
+  book = book or { levels = {}, covered = 0 }
+  if capital == nil then
+    capital = self.cash
   end
-  local levels = book.levels
-  if type(levels) ~= "table" or covered <= 0 then
-    return quote
-  end
-  local need = quantity
-  for i = 1, table.getn(levels) do
-    if need <= 0 then
-      break
-    end
-    local lvl = levels[i]
-    local p = lvl and lvl.p
-    local q = lvl and lvl.q
-    if p and p > 0 and q and q > 0 then
-      local take = q
-      if take > need then
-        take = need
-      end
-      quote.totalCost = quote.totalCost + take * p
-      quote.filledQuantity = quote.filledQuantity + take
-      quote.marginalUnitCost = p
-      quote.levelsConsumed = quote.levelsConsumed + 1
-      need = need - take
+  local constraints = { capital = capital }
+  local inv = OnyxiaGold.Inventory
+  if inv and inv.GetFreeGeneralSlots then
+    local free = inv:GetFreeGeneralSlots()
+    if free ~= nil then
+      constraints.freeSlots = free
     end
   end
-  if quote.filledQuantity > 0 then
-    quote.averageUnitCost = math.floor(quote.totalCost / quote.filledQuantity)
+  local quote
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
+    quote = OnyxiaGold.Lots.Quote(book.levels, quantity, constraints)
+  else
+    quote = {
+      requestedUnits = quantity,
+      purchasedUnits = 0,
+      consumedUnits = 0,
+      excessUnits = 0,
+      cashRequired = 0,
+      economicConsumedCost = 0,
+      leftoverAssetValue = 0,
+      selectedLots = {},
+      complete = quantity <= 0,
+      totalCost = 0,
+      filledQuantity = 0,
+    }
   end
-  quote.complete = (quantity <= covered) and (quote.filledQuantity >= quantity)
+  quote.depthCoveredQuantity = book.covered or 0
   return quote
+end
+
+function Session:Quote(itemID, quantity, capital)
+  return self:QuoteBook(self:EnsureDepth(itemID), quantity, capital)
 end
 
 function Session:AcquisitionCost(itemID, quantity)
@@ -251,40 +225,63 @@ function Session:AcquisitionCost(itemID, quantity)
   if not quote.complete then
     return nil
   end
-  return quote.totalCost
+  return quote.cashRequired or quote.totalCost
 end
 
-local function consumeDepth(book, quantity)
-  local need = math.floor(tonumber(quantity) or 0)
-  if need <= 0 then
-    return true
+function Session:EconomicCost(itemID, quantity)
+  quantity = tonumber(quantity) or 0
+  if quantity <= 0 then
+    return 0
   end
-  if (book.covered or 0) < need then
-    return false
+  local quote = self:Quote(itemID, quantity)
+  if not quote.complete then
+    return nil
   end
-  local i = 1
-  local n = table.getn(book.levels)
-  while i <= n and need > 0 do
+  return quote.economicConsumedCost
+end
+
+local function copyBook(book)
+  local levels = {}
+  local source = book and book.levels or {}
+  for i = 1, table.getn(source) do
+    local lvl = source[i]
+    levels[i] = {
+      p = lvl.p,
+      q = lvl.q,
+      n = lvl.n,
+      s = lvl.s,
+    }
+  end
+  return { levels = levels, covered = book and book.covered or 0 }
+end
+
+local function consumeLots(book, selected)
+  for i = 1, table.getn(selected or {}) do
+    local lot = selected[i]
+    local lvl = lot and book.levels[lot.level]
+    local size = lot and tonumber(lot.s) or 0
+    if not lvl or size < 1 or (lvl.q or 0) < size or (lvl.n or 0) < 1 then
+      return false
+    end
+    lvl.n = lvl.n - 1
+    lvl.q = lvl.q - size
+    book.covered = (book.covered or 0) - size
+  end
+  local kept = {}
+  local covered = 0
+  for i = 1, table.getn(book.levels) do
     local lvl = book.levels[i]
-    local q = lvl and lvl.q or 0
-    if q <= 0 then
-      table.remove(book.levels, i)
-      n = n - 1
-    elseif q > need then
-      lvl.q = q - need
-      book.covered = book.covered - need
-      need = 0
-    else
-      need = need - q
-      book.covered = book.covered - q
-      table.remove(book.levels, i)
-      n = n - 1
+    if lvl and (lvl.q or 0) > 0 and (lvl.n or 0) > 0 then
+      table.insert(kept, lvl)
+      covered = covered + lvl.q
     end
   end
+  book.levels = kept
+  book.covered = covered
   if book.covered < 0 then
     book.covered = 0
   end
-  return need == 0
+  return true
 end
 
 local function reservationLines(spec)
@@ -317,6 +314,14 @@ function Session:Reserve(spec)
 
   local lines = reservationLines(spec)
   local normalized = {}
+  local scratch = {}
+  local bags = {}
+  for itemID, count in pairs(self.bags or {}) do
+    bags[itemID] = count
+  end
+  local leftCash = self.cash
+  local quotedCash = 0
+  local buyCount = 0
   for i = 1, table.getn(lines) do
     local line = lines[i] or {}
     local itemID = tonumber(line.itemID)
@@ -326,46 +331,64 @@ function Session:Reserve(spec)
       return false
     end
     if ownedUnits > 0 then
-      if not itemID or (self.bags[itemID] or 0) < ownedUnits then
+      if not itemID or (bags[itemID] or 0) < ownedUnits then
         return false
       end
+      bags[itemID] = bags[itemID] - ownedUnits
     end
+    local purchased = 0
+    local consumed = 0
+    local excess = 0
+    local selected = nil
     if buyUnits > 0 then
       if not itemID then
         return false
       end
-      local quote = self:Quote(itemID, buyUnits)
+      local book = scratch[itemID]
+      if not book then
+        book = copyBook(self:EnsureDepth(itemID))
+        scratch[itemID] = book
+      end
+      local quote = self:QuoteBook(book, buyUnits, leftCash)
       if not quote.complete then
         return false
       end
+      if not consumeLots(book, quote.selectedLots) then
+        return false
+      end
+      purchased = quote.purchasedUnits or 0
+      consumed = quote.consumedUnits or 0
+      excess = quote.excessUnits or 0
+      selected = quote.selectedLots
+      local part = quote.cashRequired or 0
+      quotedCash = quotedCash + part
+      leftCash = leftCash - part
+      buyCount = buyCount + 1
+      bags[itemID] = (bags[itemID] or 0) + purchased - consumed
+    end
+    if bags[itemID] and bags[itemID] <= 0 then
+      bags[itemID] = nil
     end
     table.insert(normalized, {
       itemID = itemID,
       ownedUnits = ownedUnits,
       buyUnits = buyUnits,
+      purchasedUnits = purchased,
+      consumedUnits = consumed,
+      excessUnits = excess,
+      selectedLots = selected,
     })
   end
-
-  for i = 1, table.getn(normalized) do
-    local line = normalized[i]
-    if line.buyUnits > 0 then
-      local book = self:EnsureDepth(line.itemID)
-      if not consumeDepth(book, line.buyUnits) then
-        return false
-      end
-    end
+  if buyCount > 0 and cash ~= quotedCash then
+    return false
   end
+
+  for itemID, book in pairs(scratch) do
+    self.depth[itemID] = book
+  end
+  self.bags = bags
   self.cash = self.cash - cash
   self.spent = self.spent + cash
-  for i = 1, table.getn(normalized) do
-    local line = normalized[i]
-    if line.ownedUnits > 0 then
-      self.bags[line.itemID] = self.bags[line.itemID] - line.ownedUnits
-      if self.bags[line.itemID] <= 0 then
-        self.bags[line.itemID] = nil
-      end
-    end
-  end
   local itemID = normalized[1] and normalized[1].itemID or nil
   local ownedUnits = normalized[1] and normalized[1].ownedUnits or 0
   local buyUnits = normalized[1] and normalized[1].buyUnits or 0
@@ -378,9 +401,11 @@ function Session:Reserve(spec)
     self.outputUsed[outputID] = (self.outputUsed[outputID] or 0) + outputUnits
   end
   local bagSlots = tonumber(spec.bagSlots) or 0
-  if bagSlots > 0 then
-    self.bagSlotsUsed = (self.bagSlotsUsed or 0) + bagSlots
+  if bagSlots > (self.bagPeak or 0) then
+    self.bagPeak = bagSlots
   end
+  -- Purchase slots are freed when the same action consumes the reagents.
+  -- They are not subtracted from the next action.
   table.insert(self.reserved, {
     itemID = itemID,
     cash = cash,

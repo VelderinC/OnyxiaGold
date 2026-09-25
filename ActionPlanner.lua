@@ -233,7 +233,7 @@ local function planInputs(opp, crafts)
   crafts = tonumber(crafts) or 0
   local inputs = recipeInputs(opp)
   if crafts <= 0 then
-    return {}, 0, 0, 0, true
+    return {}, 0, 0, 0, true, 0
   end
   if table.getn(inputs) < 1 then
     return nil
@@ -261,19 +261,29 @@ local function planInputs(opp, crafts)
     end
     local toBuy = needed - owned
     local buyCost = 0
+    local economicBuy = 0
+    local leftover = 0
+    local purchased = 0
+    local consumed = 0
+    local excess = 0
     if toBuy > 0 then
       local session = OnyxiaGold.SessionState
-      local part
+      local quote
       if session and session.IsActive and session:IsActive() then
-        part = session:AcquisitionCost(itemID, toBuy)
-      else
-        part = OnyxiaGold.Prices:GetAcquisitionCost(itemID, toBuy)
+        quote = session:Quote(itemID, toBuy)
+      elseif OnyxiaGold.Prices and OnyxiaGold.Prices.GetAcquisitionQuote then
+        quote = OnyxiaGold.Prices:GetAcquisitionQuote(itemID, toBuy)
       end
-      if not part then
+      if not quote or not quote.complete then
         return nil
       end
-      buyCost = part
-      cash = cash + part
+      buyCost = quote.cashRequired or quote.totalCost or 0
+      economicBuy = quote.economicConsumedCost or buyCost
+      leftover = quote.leftoverAssetValue or 0
+      purchased = quote.purchasedUnits or toBuy
+      consumed = quote.consumedUnits or toBuy
+      excess = quote.excessUnits or 0
+      cash = cash + buyCost
     end
     local unit
     if opp and opp.saleExitUnknown then
@@ -288,9 +298,20 @@ local function planInputs(opp, crafts)
       ownedUnits = owned,
       buyUnits = toBuy,
       buyCost = buyCost,
+      economicCost = economicBuy,
+      purchasedUnits = purchased,
+      consumedUnits = consumed,
+      excessUnits = excess,
+      leftoverAssetValue = leftover,
     })
   end
-  return lines, cash, ownedValue + cash, ownedValue, true
+  local economicBuy = 0
+  local leftover = 0
+  for i = 1, table.getn(lines) do
+    economicBuy = economicBuy + (lines[i].economicCost or 0)
+    leftover = leftover + (lines[i].leftoverAssetValue or 0)
+  end
+  return lines, cash, ownedValue + economicBuy, ownedValue, true, leftover
 end
 
 -- cash, economicInput, ownedValue, complete
@@ -312,13 +333,8 @@ local function bagSlotsFor(lines)
   if free == nil then
     return nil, nil
   end
-  local session = OnyxiaGold.SessionState
-  if session and session.IsActive and session:IsActive() and session.BagSlotsUsed then
-    free = free - (session:BagSlotsUsed() or 0)
-    if free < 0 then
-      free = 0
-    end
-  end
+  -- Prior actions already consumed their reagents. Do not keep those
+  -- temporary input slots off the free count.
   local slots = 0
   for i = 1, table.getn(lines or {}) do
     local line = lines[i]
@@ -327,7 +343,8 @@ local function bagSlotsFor(lines)
       return nil, free
     end
     local partial = inv.GetPartialRoom and inv:GetPartialRoom(line.itemID) or 0
-    local spill = (line.buyUnits or 0) - partial
+    local incoming = line.purchasedUnits or line.buyUnits or 0
+    local spill = incoming - partial
     if spill < 0 then
       spill = 0
     end
@@ -351,6 +368,31 @@ end
 
 local function toolDecision(opp)
   local req = opp.requirements
+  local category = req and (req.requiredToolCategory or req.toolCategory)
+  if category == "TRANSMUTATION_STONE" then
+    local stones = OnyxiaGold.Data and OnyxiaGold.Data.TransmutationStones or {}
+    local inv = OnyxiaGold.Inventory
+    local bankName
+    for i = 1, table.getn(stones) do
+      local id = stones[i]
+      local onPerson = inv and inv.GetOnPersonCount and (inv:GetOnPersonCount(id) or 0) > 0
+      local inBank = inv and inv.GetBankCount and (inv:GetBankCount(id) or 0) > 0
+      local name = "transmutation stone"
+      if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+        name = OnyxiaGold.Data.GetItemName(id) or name
+      end
+      if onPerson then
+        return nil
+      end
+      if inBank and not bankName then
+        bankName = name
+      end
+    end
+    if bankName then
+      return "WITHDRAW_TOOL", "Withdraw " .. bankName, bankName
+    end
+    return "TOOL_MISSING", "No transmutation stone in bags or equipped", "transmutation stone"
+  end
   local toolID = req and tonumber(req.toolItemID)
   if not toolID then
     return nil
@@ -359,16 +401,9 @@ local function toolDecision(opp)
   if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
     name = OnyxiaGold.Data.GetItemName(toolID) or name
   end
-  if isLaterStone(toolID) or toolID == itemDefID("MERCURIAL_STONE") then
-    return "TOOL_NOT_CONFIRMED", "Tool not confirmed", name
-  end
   local inv = OnyxiaGold.Inventory
   local onPerson = inv and inv.GetOnPersonCount and (inv:GetOnPersonCount(toolID) or 0) > 0
   local inBank = inv and inv.GetBankCount and (inv:GetBankCount(toolID) or 0) > 0
-  if toolID == itemDefID("PHILOSOPHERS_STONE") and not onPerson
-    and inv and inv.UnconfirmedStoneOnPerson and inv:UnconfirmedStoneOnPerson() then
-    return "TOOL_NOT_CONFIRMED", "Tool not confirmed", name
-  end
   if onPerson then
     return nil
   end
@@ -376,6 +411,41 @@ local function toolDecision(opp)
     return "WITHDRAW_TOOL", "Withdraw " .. name, name
   end
   return "TOOL_MISSING", name .. " is not in bags or equipped", name
+end
+
+function Planner:GetPersonalQuote(opp, n)
+  n = math.floor(tonumber(n) or 0)
+  if n < 0 then
+    n = 0
+  end
+  local lines, cash, economic, _, complete, leftover = planInputs(opp, n)
+  if not lines or not complete or not economic then
+    return { complete = false }
+  end
+  local netPer = tonumber(opp and opp.netRevenue) or 0
+  local expected = n * netPer
+  local profit = expected - economic
+  local marginal = profit
+  if n > 1 then
+    local _, _, prevEconomic, _, prevComplete = planInputs(opp, n - 1)
+    if not prevComplete or not prevEconomic then
+      return { complete = false }
+    end
+    marginal = profit - ((n - 1) * netPer - prevEconomic)
+  elseif n == 0 then
+    marginal = 0
+    profit = 0
+  end
+  return {
+    cashRequired = cash or 0,
+    economicInput = economic,
+    leftoverAssets = leftover or 0,
+    expectedNetOutput = expected,
+    totalProfit = profit,
+    marginalProfit = marginal,
+    complete = true,
+    inputLines = lines,
+  }
 end
 
 local function maxCraftsForCash(opp, owned, deployable, capMax)
@@ -621,6 +691,22 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     return person
   end
 
+  if cooldown and OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CooldownState then
+    local cdState = OnyxiaGold.Capabilities:CooldownState(cooldown)
+    if cdState == "COOLDOWN_UNKNOWN" then
+      person.state = "COOLDOWN_UNKNOWN"
+      person.reason = "Cooldown has not been read from the profession window"
+      person.capabilityAllowedCrafts = 0
+      return person
+    end
+    if cdState == "ON_COOLDOWN" then
+      person.state = "ON_COOLDOWN"
+      person.reason = "Transmute cooldown is still running"
+      person.capabilityAllowedCrafts = 0
+      return person
+    end
+  end
+
   if cooldownTaken then
     person.state = "COOLDOWN_RESERVED"
     person.reason = "Cooldown already reserved in this plan"
@@ -674,15 +760,23 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     execCap = capabilityAllowed
   end
   if execCap > 0 then
+    local marketCap = tonumber(opp.marketProfitableCrafts)
+    if marketCap and marketCap > 0 and execCap > marketCap then
+      execCap = marketCap
+    end
     local chosen
-    local n = execCap
-    while n > 0 do
-      local profit = commit(n)
-      if profit and profit > 0 and meetsThreshold(profit) then
-        chosen = n
+    local n = 1
+    while n <= execCap do
+      local personal = self:GetPersonalQuote(opp, n)
+      local marginal = personal and personal.marginalProfit
+      if not personal or not personal.complete or not marginal then
         break
       end
-      n = n - 1
+      if marginal <= 0 or not meetsThreshold(marginal) then
+        break
+      end
+      chosen = n
+      n = n + 1
     end
     if chosen then
       local sensible, capped, hold, snap = cappedCrafts(opp, chosen)
@@ -762,17 +856,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     afterCap = capabilityAllowed
   end
   if afterCap > 0 then
-    local n = afterCap
-    while n > 0 do
-      local profit = commit(n)
-      if profit and profit > 0 and meetsThreshold(profit) then
-        person.state = "ACTIONABLE_AFTER_MAIL"
-        person.reason = "Collect mail first"
-        person.executableCrafts = 0
-        person.sensibleCrafts = 0
-        return person
-      end
-      n = n - 1
+    local personal = self:GetPersonalQuote(opp, 1)
+    local marginal = personal and personal.marginalProfit
+    if personal and personal.complete and marginal and marginal > 0 and meetsThreshold(marginal) then
+      person.state = "ACTIONABLE_AFTER_MAIL"
+      person.reason = "Collect mail first"
+      person.executableCrafts = 0
+      person.sensibleCrafts = 0
+      person.cashRequiredNow = personal.cashRequired or 0
+      return person
     end
   end
 
@@ -1223,15 +1315,47 @@ local function readyPostActions(actions)
     saleUnit = tonumber(saleUnit)
     if postCount >= 1 and saleUnit and saleUnit > 0 then
       local stack = clickStackSize(itemID, postCount)
-      local gross = math.floor(saleUnit * stack + 0.5)
-      local net = gross
-      if OnyxiaGold.ApplyAuctionHouseCut then
-        net = OnyxiaGold:ApplyAuctionHouseCut(gross)
+      local heldUnit = saleUnit
+      if OnyxiaGold.Prices and OnyxiaGold.Prices.GetLiquidationPrice then
+        local liquid = OnyxiaGold.Prices:GetLiquidationPrice(itemID)
+        if liquid and liquid > 0 then
+          heldUnit = liquid
+        end
       end
-      local bagNet = saleUnit * postCount
-      if OnyxiaGold.ApplyAuctionHouseCut then
-        bagNet = OnyxiaGold:ApplyAuctionHouseCut(bagNet)
+      local age = OnyxiaGold.Prices and OnyxiaGold.Prices.GetAge and OnyxiaGold.Prices:GetAge(itemID)
+      local stale = true
+      if OnyxiaGold.Lots and OnyxiaGold.Lots.IsStale then
+        stale = OnyxiaGold.Lots.IsStale(age, OnyxiaGold.Config and OnyxiaGold.Config.QuickScanStaleSeconds)
       end
+      local record = OnyxiaGold.Prices and OnyxiaGold.Prices.GetRecord and OnyxiaGold.Prices:GetRecord(itemID)
+      local external = record and record.source == "external"
+      local marketMin = OnyxiaGold.Prices and OnyxiaGold.Prices.GetMarketMinimum and OnyxiaGold.Prices:GetMarketMinimum(itemID)
+      local ownMin = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
+        and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
+      local floorUnit = saleUnit
+      if OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.PostFloorUnit then
+        floorUnit = OnyxiaGold.AuctionStop.PostFloorUnit(heldUnit, 1, 0)
+      end
+      local fresh = not stale and not external
+      local policy = OnyxiaGold.Lots and OnyxiaGold.Lots.PostPolicy and OnyxiaGold.Lots.PostPolicy({
+        economicFloor = floorUnit,
+        marketMinimum = marketMin,
+        ownMinimum = ownMin,
+        stackSize = stack,
+        stale = stale,
+        external = external and true or false,
+        liveValidated = fresh,
+      })
+      local postUnit = saleUnit
+      if policy and policy.targetPrice and policy.decision ~= "needs_validation" then
+        postUnit = policy.targetPrice
+      end
+      local economics = OnyxiaGold.Lots and OnyxiaGold.Lots.PostEconomics
+        and OnyxiaGold.Lots.PostEconomics(postUnit, stack, heldUnit, OnyxiaGold:GetAuctionHouseCutBPS())
+      local gross = economics and economics.stackBuyout or math.floor(postUnit * stack + 0.5)
+      local net = economics and economics.expectedRevenue or gross
+      local profit = economics and economics.expectedProfit or 0
+      local inventoryValue = economics and economics.inventoryValue or (heldUnit * stack)
       local itemName = "item"
       if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
         itemName = OnyxiaGold.Data.GetItemName(itemID) or itemName
@@ -1246,28 +1370,43 @@ local function readyPostActions(actions)
         itemName,
         inBags,
         stack,
-        OnyxiaGold.FormatMoney(saleUnit),
+        OnyxiaGold.FormatMoney(postUnit),
         OnyxiaGold.FormatMoney(net),
         cut
       )
+      local detail = "Revenue if it sells. Not profit. Open the Auction House, then click Post."
+      if policy and policy.decision == "needs_validation" then
+        detail = "Needs a fresh market check before it can post."
+      end
       table.insert(posts, {
         kind = "POST",
         name = name,
         typeLabel = outputs[itemID] or "Post",
-        expectedProfit = bagNet,
+        expectedProfit = profit,
+        expectedRevenue = net,
+        cashReleased = net,
+        inventoryValue = inventoryValue,
         cashRequiredNow = 0,
         crafts = postCount,
         state = "POST",
-        detail = "One click posts one stack. Open the Auction House first.",
+        detail = detail,
         outputItemID = itemID,
         bagCount = inBags,
         postCount = postCount,
         stackSize = stack,
-        saleUnit = saleUnit,
+        saleUnit = postUnit,
+        stackBuyout = gross,
         bid = gross,
         buyout = gross,
         duration = 2,
         sortName = itemName,
+        snapshotAge = age,
+        postStale = stale and true or false,
+        postExternal = external and true or false,
+        economicFloor = floorUnit,
+        marketMinimum = marketMin,
+        ownMinimum = ownMin,
+        deposit = nil,
       })
     end
   end
@@ -1470,6 +1609,8 @@ function Planner:Refresh()
         or person.state == "STALE_DATA"
         or person.state == "UNPROFITABLE"
         or person.state == "COOLDOWN_RESERVED"
+        or person.state == "COOLDOWN_UNKNOWN"
+        or person.state == "ON_COOLDOWN"
         or person.state == "OUTPUT_CAPPED"
         or person.state == "NOT_ACTIONABLE"
         or person.state == "POST_OR_HOLD"

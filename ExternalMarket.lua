@@ -10,50 +10,12 @@ OnyxiaGold.ExternalMarket = OnyxiaGold.ExternalMarket or {}
 local External = OnyxiaGold.ExternalMarket
 
 local STALE_SECONDS = 3600
-local SNAPSHOT_PATHS = {
-  "Data/ExternalMarketData.lua",
-  "Interface\\AddOns\\OnyxiaGold\\Data\\ExternalMarketData.lua",
-}
 
 local function validSnapshot(data)
-  if type(data) ~= "table" then
-    return false
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.AcceptExternalSnapshot then
+    return OnyxiaGold.Lots.AcceptExternalSnapshot(data)
   end
-  if data.schemaVersion ~= 1 then
-    return false
-  end
-  if data.source ~= "ah.nerfed.net" then
-    return false
-  end
-  if data.realm ~= "Onyxia" or data.faction ~= "Alliance" then
-    return false
-  end
-  if type(data.scannedAt) ~= "number" then
-    return false
-  end
-  if type(data.items) ~= "table" then
-    return false
-  end
-  return true
-end
-
-local function tryDisk()
-  if type(OnyxiaGoldExternalData) == "table" then
-    return
-  end
-  if type(loadfile) ~= "function" then
-    return
-  end
-  for i = 1, table.getn(SNAPSHOT_PATHS) do
-    local chunk = loadfile(SNAPSHOT_PATHS[i])
-    if chunk then
-      local ok = pcall(chunk)
-      if ok and type(OnyxiaGoldExternalData) == "table" then
-        return
-      end
-      OnyxiaGoldExternalData = nil
-    end
-  end
+  return false
 end
 
 function External:Data()
@@ -64,7 +26,8 @@ function External:Data()
 end
 
 function External:Reload()
-  tryDisk()
+  -- The companion addon OnyxiaGoldExternal defines this global.
+  -- WoW addon Lua has no loadfile, and a missing companion is not an error.
   if validSnapshot(OnyxiaGoldExternalData) then
     self.snapshot = OnyxiaGoldExternalData
   else

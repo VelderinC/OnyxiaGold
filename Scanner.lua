@@ -106,6 +106,7 @@ function Scanner:ResetRuntime()
   self.quickIndex = 1
   self.currentWatch = nil
   self.expectedItemID = nil
+  self.ignoredListUpdates = 0
   self.expectedName = nil
   self.expectedPage = nil
   self.querySequence = 0
@@ -213,20 +214,188 @@ local function beginScan(self, mode)
   return true
 end
 
+local function addID(map, itemID, score, name)
+  itemID = tonumber(itemID)
+  if not itemID then
+    return
+  end
+  local row = map[itemID]
+  if not row or score > row.score then
+    if not name and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+      name = OnyxiaGold.Data.GetItemName(itemID)
+    end
+    map[itemID] = { itemID = itemID, name = name or tostring(itemID), score = score }
+  end
+end
+
+local function addMap(map, source, score)
+  if type(source) ~= "table" then
+    return
+  end
+  for itemID, count in pairs(source) do
+    if (tonumber(count) or 0) > 0 then
+      addID(map, itemID, score)
+    end
+  end
+end
+
+local function addRecipes(map, score)
+  local function addRecipe(def)
+    if not def then
+      return
+    end
+    if def.inputs then
+      for j = 1, table.getn(def.inputs) do
+        addID(map, def.inputs[j] and def.inputs[j].itemID, score)
+      end
+    end
+    if def.outputs then
+      for j = 1, table.getn(def.outputs) do
+        addID(map, def.outputs[j] and def.outputs[j].itemID, score)
+      end
+    end
+    addID(map, def.sourceItemID, score)
+    addID(map, def.targetItemID, score)
+  end
+  local data = OnyxiaGold.Data
+  local trans = data and data.Transmutes or {}
+  for i = 1, table.getn(trans) do
+    addRecipe(trans[i])
+  end
+  local conv = data and data.Conversions or {}
+  for i = 1, table.getn(conv) do
+    addRecipe(conv[i])
+  end
+  local crafts = data and data.EnchantCrafts or {}
+  for i = 1, table.getn(crafts) do
+    addRecipe(crafts[i])
+  end
+end
+
+-- Decision-critical markets. Deduped by item id. Higher score is scanned first.
+function Scanner:BuildFastQueue()
+  local map = {}
+  local watch = OnyxiaGold.Data.GetEnabledWatchlist and OnyxiaGold.Data.GetEnabledWatchlist() or {}
+  for i = 1, table.getn(watch) do
+    local entry = watch[i]
+    if entry and entry.itemID then
+      addID(map, entry.itemID, 100, entry.name)
+    end
+  end
+  addRecipes(map, 600)
+  local character = OnyxiaGold.Database and OnyxiaGold.Database.GetCharacter and OnyxiaGold.Database:GetCharacter()
+  if character then
+    addMap(map, character.inventory and character.inventory.bags, 400)
+    addMap(map, character.bank and character.bank.items, 300)
+    addMap(map, character.mail and character.mail.items, 300)
+    local listings = character.auctions and character.auctions.listings
+    if type(listings) == "table" then
+      for i = 1, table.getn(listings) do
+        addID(map, listings[i] and listings[i].itemID, 500)
+      end
+    end
+  end
+  local actions = OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetActions and OnyxiaGold.ActionPlanner:GetActions() or {}
+  for i = 1, table.getn(actions) do
+    local action = actions[i]
+    local lines = action.person and action.person.inputLines
+    if type(lines) == "table" then
+      for j = 1, table.getn(lines) do
+        addID(map, lines[j] and lines[j].itemID, 1000)
+      end
+    end
+    addID(map, action.outputItemID, 1000)
+    local opp = action.sourceOpp
+    local outputs = opp and opp.outputItemIDs
+    if type(outputs) == "table" then
+      for j = 1, table.getn(outputs) do
+        addID(map, outputs[j], 900)
+      end
+    end
+  end
+  -- External data only raises items already in this decision set. It does not
+  -- turn Fast Scan into a copy of the whole companion snapshot.
+  local external = OnyxiaGold.ExternalMarket and OnyxiaGold.ExternalMarket.Data and OnyxiaGold.ExternalMarket:Data()
+  if external and type(external.items) == "table" and not (OnyxiaGold.ExternalMarket.IsStale and OnyxiaGold.ExternalMarket:IsStale()) then
+    for itemID, row in pairs(map) do
+      if type(external.items[itemID]) == "table" and row.score < 250 then
+        row.score = 250
+      end
+    end
+  end
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.IsStale then
+    for itemID, row in pairs(map) do
+      if OnyxiaGold.Prices:IsStale(itemID) and row.score < 700 then
+        row.score = 700
+      end
+    end
+  end
+  local queue = {}
+  for _, row in pairs(map) do
+    if row.name and row.name ~= "" then
+      table.insert(queue, row)
+    end
+  end
+  table.sort(queue, function(a, b)
+    if a.score ~= b.score then
+      return a.score > b.score
+    end
+    return (a.itemID or 0) < (b.itemID or 0)
+  end)
+  return queue
+end
+
+-- Tracked commodities: watchlist plus recipe inputs and outputs.
+function Scanner:BuildDeepQueue()
+  local map = {}
+  local watch = OnyxiaGold.Data.GetEnabledWatchlist and OnyxiaGold.Data.GetEnabledWatchlist() or {}
+  for i = 1, table.getn(watch) do
+    local entry = watch[i]
+    if entry and entry.itemID then
+      addID(map, entry.itemID, 100, entry.name)
+    end
+  end
+  addRecipes(map, 100)
+  local queue = {}
+  for _, row in pairs(map) do
+    table.insert(queue, row)
+  end
+  table.sort(queue, function(a, b)
+    return (a.itemID or 0) < (b.itemID or 0)
+  end)
+  return queue
+end
+
 function Scanner:StartQuick()
   if not beginScan(self, "quick") then
     return
   end
-  self.quickQueue = OnyxiaGold.Data.GetEnabledWatchlist and OnyxiaGold.Data.GetEnabledWatchlist() or {}
+  self.quickQueue = self:BuildFastQueue()
   self.quickIndex = 1
   if table.getn(self.quickQueue) == 0 then
-    OnyxiaGold:Print("Watchlist is empty.", "Scanner")
+    OnyxiaGold:Print("Nothing decision-critical to scan.", "Scanner")
     self:ResetRuntime()
     return
   end
   OnyxiaGold.Log:Info("Scanner", "Quick Scan started (" .. tostring(table.getn(self.quickQueue)) .. " items)")
   self:PrepareQuickItem()
   self:SetStatus("Quick Scan starting...")
+end
+
+function Scanner:StartDeep()
+  if not beginScan(self, "quick") then
+    return
+  end
+  self.quickQueue = self:BuildDeepQueue()
+  self.quickIndex = 1
+  if table.getn(self.quickQueue) == 0 then
+    OnyxiaGold:Print("Commodity list is empty.", "Scanner")
+    self:ResetRuntime()
+    return
+  end
+  OnyxiaGold.Log:Info("Scanner", "Deep Scan started (" .. tostring(table.getn(self.quickQueue)) .. " items)")
+  self:PrepareQuickItem()
+  self:SetStatus("Deep Scan starting...")
 end
 
 function Scanner:StartFull()
@@ -339,7 +508,11 @@ end
 function Scanner:OnAuctionListUpdate()
   if self.state ~= STATE_WAITING then
     if self:IsScanning() then
-      OnyxiaGold.Log:Debug("Scanner", "list update ignored state=" .. tostring(self.state) .. " seq=" .. tostring(self.querySequence))
+      self.ignoredListUpdates = (self.ignoredListUpdates or 0) + 1
+      local ignored = self.ignoredListUpdates
+      if ignored == 1 or ignored % 25 == 0 then
+        OnyxiaGold.Log:Trace("Scanner", "list update ignored state=" .. tostring(self.state) .. " count=" .. tostring(ignored))
+      end
     end
     return
   end

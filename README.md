@@ -6,7 +6,7 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.29** keeps a post row after a conversion, transmute, or craft is sitting in your bags. One click lists one stack while the Auction House is open. A profitable 20-hour transmute still ranks above repeatable crafts. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
+Version **0.1.30** prices a buy as the whole auction you would actually purchase. Leftover materials stay in the plan. A craft is added only while that extra craft is still worth more than it consumes. Posting an owned stack reports the sale proceeds and the profit separately. A profitable 20-hour transmute still ranks above repeatable crafts, and only after the profession window has shown the cooldown is ready. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not buy or post on a timer, does not loot mail, and does not use anything outside the WoW client.
 
@@ -23,19 +23,22 @@ Jewelcrafting remains in the generic capability model for GLOBAL market analysis
 
 ## Current features
 
-1. **Quick Scan** — name queries for a data-driven watchlist, then filter by item ID
-2. **Full Scan** — page-by-page browse of the entire AH
-3. Compact buyout **order book** per item (aggregated by unit price)
-4. **Depth-aware acquisition cost** (walks cheapest levels until the requested quantity is filled)
-5. Quantity-weighted P10 / P25 / median / P75 / mean
-6. Essence and shard conversion arbitrage (both directions; item-use, no profession), including Magic, Astral, Mystic, and Nether
-7. Saronite → Titanium transmute EV, gated on Alchemy 395 + known recipe 60350
-8. Realm/faction market keys (`Onyxia|Horde`, `Onyxia|Alliance`)
-9. Character snapshots keyed by `Realm|Faction|Name`
-10. Liquid gold, mail ready, pending AH invoices, listed auctions, bag/bank materials
-11. Working-capital reserve (default 10%)
-12. Greedy personal action plan from current deployable gold only
-13. Stale-data age in header/tooltips; diagnostic log
+1. **Fast Scan** (`/og scan`) — name queries for the markets that can change the current plan: watchlist, recipe inputs and outputs, bags, bank, mail, your listings, and the plan. Item ID filter. External prices only raise items already in that set.
+2. **Deep Scan** (`/og deep`) — watchlist plus recipe commodities, still not the whole auction house
+3. **Full Scan** (`/og full`) — page-by-page browse of the entire AH
+4. Whole-auction acquisition. Cash required is the listing total. Economic cost is the units the recipe consumes. Excess stays in the session for the next action
+5. One buy path: targeted query, item-ID filter, whole-lot choice, then PlaceAuctionBid on the Buy click after the live row is checked again
+6. Personal quotes stop when the next craft's marginal profit is not positive
+7. Owned disenchant compares a conservative floor with vendor and, when known, the intact sale. A valuable BoE is not marked DE. States are DE, SELL, CHECK_AH, UNKNOWN_EXIT, and VENDOR
+8. Post rows separate expected revenue, cash released, inventory value, and expected profit. A stale or external snapshot is not posted. The price matches the market when that is above the floor
+9. Optional `OnyxiaGoldExternal` companion addon. Missing companion is fine. External data never authorises a buy
+10. Any verified transmutation stone in bags or equipped. Bank-only is withdraw. None is missing. The stone is not consumed
+11. Transmute cooldown is read with GetTradeSkillCooldown while Alchemy is open. Until then the row is COOLDOWN_UNKNOWN
+12. `/reload` runs one opportunity rebuild when the database, character, inventory, professions, and a market snapshot are already there
+13. Factory inventory dispositions depend on bags, bank, mail, or listed
+14. Quantity-weighted P10 / P25 / median / P75 / mean
+15. Essence and shard conversion arbitrage, Saronite to Titanium, epic-gem and older 20-hour transmutes, and the no-cooldown alchemy crafts already in the recipe file
+16. Realm/faction market keys, character snapshots, liquid / mail / pending / listed, 10% reserve, and `/og test`
 
 ## Installation
 
@@ -55,8 +58,10 @@ The folder that contains `OnyxiaGold.toc` must be named `OnyxiaGold`.
 | Command | Action |
 | --- | --- |
 | `/og` or `/onyxiagold` | Toggle the main window |
-| `/og scan` or `/og quick` | Quick Scan (watchlist) |
+| `/og scan` or `/og quick` | Fast Scan (decision-critical markets) |
+| `/og deep` | Deep Scan (watchlist and recipe commodities) |
 | `/og full` | Full Scan (entire AH) |
+| `/og test` | Run the economic checks and print one line per check |
 | `/og opportunities` | Recalculate market opportunities and the personal plan |
 | `/og debug` | Toggle debug **chat** echo (the internal log always records) |
 | `/og log` | Toggle the copyable diagnostic log window |
@@ -86,9 +91,9 @@ Default reserve is **10%** of the liquid gold the reserve is calculated against 
 
 Owned materials have **opportunity cost** (liquidation value) in economic profit, and **zero extra cash** in cash-flow.
 
-## Quick Scan vs Full Scan
+## Fast Scan, Deep Scan, and Full Scan
 
-**Quick Scan** queries only `Data/Watchlist.lua` items by name, keeps paging until that name search is exhausted, then **filters every row by item ID**. It **updates only queried items** and never wipes the rest of the market snapshot.
+**Fast Scan** queries the decision-critical item set by name, keeps paging until that name search is exhausted, then **filters every row by item ID**. It **updates only queried items** and never wipes the rest of the market snapshot. **Deep Scan** is the watchlist plus recipe inputs and outputs.
 
 **Full Scan** walks every browse page with an empty name query and **replaces** the current realm/faction `latest` snapshot.
 
@@ -102,8 +107,9 @@ All money is **integer copper** (1 gold = 10000 copper).
 - `buyoutQuantity` — units with a buyout (instant-buy stock)
 - `GetQuantity()` returns **buyoutQuantity** so acquisition math cannot count bid-only stock
 - `buyoutQuantity` is the full instant-buy count. `depthCoveredQuantity` is how much of that book the persisted depth still represents
-- `GetAcquisitionCost(id, n)` walks the persisted buyout book. It returns **nil** if covered depth cannot fill `n`. It does not price past `depthCoveredQuantity`
-- `GetAcquisitionQuote` returns filled quantity, total/avg/marginal cost, `depthCoveredQuantity`, and `complete`
+- `GetAcquisitionCost(id, n)` is the **cash** required to buy whole auctions that cover `n`. It returns **nil** if the covered book cannot fill `n`
+- `GetEconomicAcquisitionCost(id, n)` is the cost of the units the recipe consumes. Leftover units stay valued at what was paid for them
+- `GetAcquisitionQuote` returns requested, purchased, consumed, and excess units, cash required, economic cost, leftover value, the selected lots, and `complete`
 - Median / percentiles / weighted mean are **quantity-weighted over the full runtime book**, then the acquisition depth is truncated for storage
 - Opportunity **sell** unit is **P25**, falling back to P10 then minimum on thin books
 - `GetMarketReferencePrice` is the quantity-weighted median
@@ -158,7 +164,7 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Void Shatter | Enchanting 375, spell 45765. One Void Crystal becomes two Large Prismatic Shards. One craft. Runed Eternium Rod (22463) must be on the character. If selling the crystal leaves more, the row says sell. Abyss Crystal has no shatter line |
 | 3 Small Prismatic Shards → 1 Large, and the reverse | Enchanting 335, spells 28022 and 42615. Runed Fel Iron Rod (22461) must be on the character and the recipe must be known. Not an item click |
 | 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
-| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone (item 9149) must be in bags or equipped. It is not consumed |
+| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Any transmutation stone (Philosopher's Stone 9149, Alchemist's Stone 13503, or a later alchemist stone) must be in bags or equipped. It is not consumed. Mercurial Stone 31080 is a reagent, not a tool |
 | Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |
 | Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown. Cast time stays blank |
 | Arcanite, Primal Might, Elemental Fire | One craft of the best. Not the 20-hour cooldown. Elemental Fire is three, and mastery is not applied. Cast times are 2, 5, and 25 seconds |
@@ -173,21 +179,22 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - No realised sales velocity or dump-the-market absorption model
 - Sell side still uses a conservative unit (P25), not a walk of the output book
 - Transmute Master remains expected value, not a guaranteed extra bar
-- `getAll` is detected and logged but **not** used unless `/og getall` is turned on
-- 3.3.5a has no exact-match AH query; Quick Scan relies on name + item ID filter
-- `seller_temp_invoice` pending mail is implemented, but 3.3.5 MailFrame may not expose it; confirm on Warmane
+- `getAll` is off unless `/og getall` is turned on. Warmane getAll is untested
+- Browse pages are not treated as price-sorted. Warmane's sort has not been verified, so a buy keeps paging while the page is full, up to the page cap. The optimiser only sees the page it is on
+- 3.3.5a has no exact-match AH query. Scans rely on name plus an item ID filter
+- `seller_temp_invoice` pending mail is implemented, but 3.3.5 MailFrame may not expose it
 - Owner-auction snapshot does not page. If `shown < total`, Listed is approximate (`complete = false`)
 - If the mailbox has not loaded every message, Mail Ready and Pending are approximate (`snapshotComplete = false`)
-- Known recipes are replaced per profession on a complete tradeskill scan. They are not appended forever
-- `sensibleCrafts` is a crude cap against the visible output book after stock he already holds, not a liquidity model or a sale rate. Partial and stale snapshots still count
-- A buy stops at free general bag slots. The auction page shows the stop. Post lists one stack from that row, and only from the Post click
-- Bank counts are last-open snapshots
-- Recipe knowledge is only as current as the last tradeskill window scan
-- No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)
-- Recursive crafting, farm GPH, and automated buy/post/loot are out of scope
-- Neutral AH is not partitioned yet (player faction market only)
-- The planner reserves cash, bag units, and a cloned auction book inside one plan. Planned output is also capped to the visible buyout book. Bank stock is still not bag stock.
-- DE skill-floor table is centralized but must be confirmed on Warmane before buy recommendations
+- Known recipes are replaced per profession on a complete tradeskill scan
+- A shared transmute is not actionable until Alchemy has been opened and the cooldown was read. A nil cooldown on a scanned recipe means ready
+- Disenchant expected value currently equals the conservative floor. Northrend uncommon rates and the skill-floor table are not confirmed on Warmane. Unknown bind plus no intact price is CHECK_AH, not DE
+- `sensibleCrafts` is a cap against the visible output book, not a sale rate
+- Bag free slots, stack size, and partial room are stored on a bag scan. A buy can be refused when those slots cannot hold the lots. Peak occupancy is what the plan records
+- Post uses a fresh non-external snapshot as the live check. The Post click does not send a new query first. Stale and external prices are refused
+- Bank counts are last-open snapshots. Recipe knowledge is only as current as the last tradeskill window
+- Recursive crafting, farm gold-per-hour, auction-house disenchant buys, and unattended buy/post/loot are out of scope
+- Neutral AH is not partitioned (player faction market only)
+- The planner reserves cash, bag units, and a cloned auction book inside one plan. Bank stock is not bag stock
 
 ## Sharing logs
 
@@ -224,7 +231,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 27. Multiple recommendations do not independently spend the same gold.
 28. `/reload` persists character snapshots.
 29. No Retail profession APIs (`C_TradeSkillUI`, `GetProfessions`) in the addon.
-30. Lua 5.1 review: no `#`, no `%` modulo, no `continue`.
+30. Lua 5.1 review: no `#` length operator, no `math.mod`, no `continue`. Integer remainder uses `%`.
 31. Alchemy 450 + Enchanting 450 + TM is reported as factory setup complete.
 32. Alchemy 450 + Jewelcrafting 450 is detected, but factory setup is incomplete (Enchanting missing).
 33. Alchemy transmute remains personally actionable when requirements are met.
@@ -232,17 +239,6 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 35. JC cuts, when added, are GLOBAL_ONLY unless this character has JC.
 36. Tailoring craft stages are locked; an already-listed crafted item may still be a DE input.
 37. Transmute Master modifies only recipes with `supportsTransmuteMastery = true`.
-
-## Future roadmap
-
-1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth, caps planned output to the visible book, keeps Dream Shard one-way, leaves prismatic shards off the action list, and adds the epic-gem cooldown choice plus Earthsiege and Skyflare. Still ahead: Factory Mail, Factory Inventory, and disenchant EV.
-2. **v0.2.0** — Full disenchant expected-value engine (weapon vs armour, iLevel, quality; Full Scan feed)
-3. **v0.2.1+** — Enchanting conversions: Abyssal Shatter, Void Shatter (confirmed 3.3.5 data), vellum scrolls
-4. **v0.3+** — Recursive capability-aware transformation graph (GLOBAL paths vs EXECUTABLE paths)
-5. Economic floor for owned gear (vendor vs sale vs DE EV)
-6. Historical percentiles, realised-sales ledger, liquidity caps
-7. Profession-independent farm valuation (never recommend Mining/Herbalism/Skinning as factory replacements)
-8. Jewelcrafting cuts remain generic/GLOBAL unless the current character has JC
 
 ## Author
 

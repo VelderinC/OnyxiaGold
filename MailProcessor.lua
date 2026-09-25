@@ -179,7 +179,8 @@ function Processor:Take(message, fromClick)
     self.step = "Left untouched."
     return false
   end
-  if not fromClick then
+  local takeAllowed = OnyxiaGold.Lots and OnyxiaGold.Lots.AllowTakeInbox and OnyxiaGold.Lots.AllowTakeInbox(fromClick)
+  if not takeAllowed then
     self.state = "WAITING_FOR_CLIENT"
     self.step = "Click again. Taking mail needs a hardware event."
     return false

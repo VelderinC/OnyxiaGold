@@ -38,9 +38,24 @@ local function maxLines()
   return (OnyxiaGold.Config and OnyxiaGold.Config.MaxLogLines) or 800
 end
 
+local lastClock
+local lastFrac = -1
+
+-- GetTime's tenth can move backwards against date() inside one wall second.
 local function clockStamp()
   local clock = date("%H:%M:%S")
-  local frac = math.floor((GetTime() * 10) % 10)
+  local frac = 0
+  if GetTime then
+    frac = math.floor((GetTime() * 10) % 10)
+  end
+  if clock ~= lastClock then
+    lastClock = clock
+    lastFrac = frac
+  elseif frac < lastFrac then
+    frac = lastFrac
+  else
+    lastFrac = frac
+  end
   return string.format("%s.%d", clock, frac)
 end
 

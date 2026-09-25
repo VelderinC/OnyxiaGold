@@ -152,6 +152,7 @@ function DB:EmptyCharacter()
     knownRecipes = {},
     recipeScans = {},
     specialisations = {},
+    cooldowns = {},
     inventory = {
       bags = {},
       equipped = {},
@@ -202,6 +203,7 @@ function DB:EnsureCharacterShape(rec)
   rec.recipeScans = type(rec.recipeScans) == "table" and rec.recipeScans or {}
   self:MigrateKnownRecipes(rec)
   rec.specialisations = type(rec.specialisations) == "table" and rec.specialisations or {}
+  rec.cooldowns = type(rec.cooldowns) == "table" and rec.cooldowns or {}
   rec.inventory = type(rec.inventory) == "table" and rec.inventory or empty.inventory
   if type(rec.inventory.bags) ~= "table" then
     rec.inventory.bags = {}

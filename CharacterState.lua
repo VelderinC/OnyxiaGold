@@ -70,6 +70,57 @@ function State:Level()
   return id and id.level or 0
 end
 
+local opportunitiesRebuilt = false
+
+local function marketHasData()
+  local db = OnyxiaGold.Database
+  if not db or not db.GetMarket then
+    return false
+  end
+  local market = db:GetMarket()
+  return type(market) == "table" and type(market.latest) == "table" and next(market.latest) ~= nil
+end
+
+-- One rebuild after login or /reload. Later bag and money events stay on the planner.
+local function tryRebuildOpportunities()
+  local Lots = OnyxiaGold.Lots
+  if not Lots or not Lots.ShouldRebuildOpportunities then
+    return false
+  end
+  local row = rec()
+  local ready = Lots.ShouldRebuildOpportunities({
+    alreadyRan = opportunitiesRebuilt,
+    database = type(OnyxiaGoldDB) == "table" and OnyxiaGoldDB.version and true or false,
+    character = row and row.identity and row.identity.name and true or false,
+    inventory = row and row.inventory and row.inventory.timestamp and true or false,
+    capabilities = row and type(row.professions) == "table" and true or false,
+    hasMarket = marketHasData(),
+  })
+  if not ready then
+    return false
+  end
+  opportunitiesRebuilt = true
+  if OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+    OnyxiaGold.OpportunityEngine:Refresh()
+  end
+  return true
+end
+
+local function refreshPlannerSoon()
+  if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
+    if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.RefreshHeader then
+      OnyxiaGold.UI:RefreshHeader()
+    end
+    return
+  end
+  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    OnyxiaGold.ActionPlanner:Refresh()
+  end
+  if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
+    OnyxiaGold.UI:Refresh()
+  end
+end
+
 function State:OnLogin()
   self:RefreshIdentity()
   if OnyxiaGold.Capital then
@@ -86,20 +137,8 @@ function State:OnLogin()
     OnyxiaGold.Capabilities:ScanSpecialisations()
   end
   OnyxiaGold.Log:Info("Character", "Bound " .. tostring(self:GetKey()))
-end
-
-local function refreshPlannerSoon()
-  if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
-    if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.RefreshHeader then
-      OnyxiaGold.UI:RefreshHeader()
-    end
-    return
-  end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-    OnyxiaGold.ActionPlanner:Refresh()
-  end
-  if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
-    OnyxiaGold.UI:Refresh()
+  if not tryRebuildOpportunities() then
+    refreshPlannerSoon()
   end
 end
 
@@ -122,7 +161,9 @@ function State:OnEvent(event, arg1)
       OnyxiaGold.Capabilities:ScanProfessions()
       OnyxiaGold.Capabilities:ScanSpecialisations()
     end
-    refreshPlannerSoon()
+    if not tryRebuildOpportunities() then
+      refreshPlannerSoon()
+    end
   elseif event == "PLAYER_LEVEL_UP" then
     self:RefreshIdentity()
     refreshPlannerSoon()

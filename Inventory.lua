@@ -113,11 +113,53 @@ function Inventory:ScanBags()
     return {}
   end
   local bags = {}
+  local partial = {}
+  local stacks = {}
+  local freeKnown = type(GetContainerNumFreeSlots) == "function"
+  local free = 0
   local bagSlots = NUM_BAG_SLOTS or 4
   for bag = BACKPACK_CONTAINER, bagSlots do
-    scanContainer(bags, bag)
+    local bagType = 0
+    if freeKnown then
+      local freeSlots, kind = GetContainerNumFreeSlots(bag)
+      bagType = tonumber(kind) or 0
+      if bag == 0 or bagType == 0 then
+        free = free + (tonumber(freeSlots) or 0)
+      end
+    end
+    local general = bag == 0 or bagType == 0
+    local slots = GetContainerNumSlots(bag)
+    if slots and slots > 0 then
+      for slot = 1, slots do
+        local link = GetContainerItemLink(bag, slot)
+        local itemID = OnyxiaGold.ParseItemID(link)
+        if itemID then
+          local _, count = GetContainerItemInfo(bag, slot)
+          count = tonumber(count) or 1
+          if count < 1 then
+            count = 1
+          end
+          addCount(bags, itemID, count)
+          if general and type(GetItemInfo) == "function" then
+            local _, _, _, _, _, _, _, maxStack = GetItemInfo(itemID)
+            maxStack = tonumber(maxStack)
+            if maxStack and maxStack > 0 then
+              stacks[itemID] = maxStack
+              if count < maxStack then
+                partial[itemID] = (partial[itemID] or 0) + (maxStack - count)
+              end
+            end
+          end
+        end
+      end
+    end
   end
   row.inventory.bags = bags
+  row.inventory.stackSize = stacks
+  row.inventory.partialRoom = partial
+  if freeKnown then
+    row.inventory.freeSlots = free
+  end
   row.inventory.timestamp = time()
   row.stateTimestamps.bags = time()
   return bags

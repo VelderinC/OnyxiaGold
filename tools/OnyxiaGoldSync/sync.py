@@ -382,13 +382,15 @@ def atomic_write(path, text):
         handle.write(text)
     finally:
         handle.close()
-    os.rename(tmp, path)
+    # os.replace overwrites an existing file on Windows. A failed download,
+    # parse, realm, faction, or schema check raises before this runs.
+    os.replace(tmp, path)
 
 
 def default_output():
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.abspath(os.path.join(here, "..", ".."))
-    return os.path.join(root, "Data", "ExternalMarketData.lua")
+    return os.path.join(root, "OnyxiaGoldExternal", "MarketData.lua")
 
 
 def main(argv):

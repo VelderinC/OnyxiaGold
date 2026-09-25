@@ -166,6 +166,55 @@ local function isHeaderSkill(skillType, isExpanded)
   return skillType == "header"
 end
 
+local cooldownBySpell
+
+local function cooldownGroupForSpell(spellID)
+  spellID = tonumber(spellID)
+  if not spellID then
+    return nil
+  end
+  if not cooldownBySpell then
+    cooldownBySpell = {}
+    local data = OnyxiaGold.Data
+    local lists = {}
+    if data then
+      lists[1] = data.Transmutes
+      lists[2] = data.EnchantCrafts
+      lists[3] = data.Conversions
+    end
+    for i = 1, table.getn(lists) do
+      local list = lists[i]
+      if type(list) == "table" then
+        for j = 1, table.getn(list) do
+          local req = list[j] and list[j].requirements
+          local spell = req and tonumber(req.recipeSpellID)
+          local group = req and req.cooldown
+          if spell and type(group) == "string" and group ~= "" then
+            cooldownBySpell[spell] = group
+          end
+        end
+      end
+    end
+  end
+  return cooldownBySpell[spellID]
+end
+
+function Cap:CooldownState(group)
+  if not group then
+    return "COOLDOWN_UNKNOWN"
+  end
+  local row = rec()
+  local obs = row and type(row.cooldowns) == "table" and row.cooldowns[group] or nil
+  local now = 0
+  if time then
+    now = time()
+  end
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.CooldownState then
+    return OnyxiaGold.Lots.CooldownState(obs, now)
+  end
+  return "COOLDOWN_UNKNOWN"
+end
+
 -- Returns the previous collapsed-header map, and whether every header expanded.
 local function expandAllHeaders()
   local collapsed = {}
@@ -258,6 +307,8 @@ function Cap:ScanOpenTradeSkill()
   local fresh = {}
   local found = 0
   local unlinked = 0
+  local observed = {}
+  local canReadCooldown = type(GetTradeSkillCooldown) == "function"
   local n = GetNumTradeSkills() or 0
   for i = 1, n do
     local name, skillType = GetTradeSkillInfo(i)
@@ -274,6 +325,26 @@ function Cap:ScanOpenTradeSkill()
       if spellID then
         fresh[spellID] = true
         found = found + 1
+        if canReadCooldown then
+          local group = cooldownGroupForSpell(spellID)
+          if group then
+            local ok, value = pcall(GetTradeSkillCooldown, i)
+            local remaining = 0
+            if ok then
+              remaining = tonumber(value) or 0
+            end
+            if remaining < 0 then
+              remaining = 0
+            end
+            local prev = observed[group]
+            if not prev or remaining > prev.remainingSeconds then
+              observed[group] = {
+                recipeSpellID = spellID,
+                remainingSeconds = remaining,
+              }
+            end
+          end
+        end
       else
         unlinked = unlinked + 1
       end
@@ -294,6 +365,22 @@ function Cap:ScanOpenTradeSkill()
   -- Complete scan replaces this profession. It does not append, and it does
   -- not touch any other profession's snapshot.
   row.knownRecipes[key] = fresh
+  if canReadCooldown and next(observed) then
+    if type(row.cooldowns) ~= "table" then
+      row.cooldowns = {}
+    end
+    local now = time()
+    for group, obs in pairs(observed) do
+      local remaining = obs.remainingSeconds or 0
+      row.cooldowns[group] = {
+        recipeSpellID = obs.recipeSpellID,
+        cooldownGroup = group,
+        remainingSeconds = remaining,
+        observedAt = now,
+        readyAt = now + remaining,
+      }
+    end
+  end
   local legacy = row.knownRecipes._legacy
   if type(legacy) == "table" then
     for spellID, _ in pairs(fresh) do

@@ -2,6 +2,7 @@
   OnyxiaGold.BagSort
   One backpack click stacks partial stacks, then packs items to the back
   of the backpack and the equipped bags. Empty slots end up at the front.
+  The Sort button is in the open backpack's title bar, just right of the portrait.
 
   Swaps run inside that button click. Nothing is scheduled after it returns.
   Bank, mail, keyring, and equipped gear are not touched.
@@ -492,6 +493,13 @@ function BagSort:RunOp(op)
   return true
 end
 
+local function refreshBagQuality()
+  local quality = OnyxiaGold.BagQuality
+  if quality and quality.Refresh then
+    quality:Refresh()
+  end
+end
+
 function BagSort:Sort()
   if self:Blocked() then
     return
@@ -502,85 +510,69 @@ function BagSort:Sort()
     local ok, message = self:RunOp(ops[i])
     if not ok then
       self:Say(message)
+      refreshBagQuality()
       return
     end
   end
   if err then
     self:Say(err)
+    refreshBagQuality()
     return
   end
+  refreshBagQuality()
   if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
     OnyxiaGold.Log:Debug("Bags", "Bag sort finished (" .. tostring(table.getn(ops)) .. " swaps)")
   end
 end
 
-local function raiseButton(btn)
-  local parent = btn:GetParent()
-  if not parent then
-    return
-  end
-  if parent.GetFrameStrata and btn.SetFrameStrata then
-    local strata = parent:GetFrameStrata()
-    if strata then
-      btn:SetFrameStrata(strata)
+-- Blizzard container frames are born with id 100. The backpack id becomes 0
+-- only while that bag is open, and it is not always ContainerFrame1.
+local function shownBackpack()
+  local frames = NUM_CONTAINER_FRAMES or 13
+  for i = 1, frames do
+    local frame = getglobal("ContainerFrame" .. i)
+    if frame and frame.IsShown and frame:IsShown() and frame.GetID and frame:GetID() == 0 then
+      return frame
     end
   end
+  return nil
+end
+
+-- Title bar, just right of the portrait (40px at x=7) and left of the close button.
+local function anchorButton(btn, frame)
+  btn:SetParent(frame)
+  btn:ClearAllPoints()
+  btn:SetPoint("TOPLEFT", frame, "TOPLEFT", 50, -6)
+  local strata = "HIGH"
+  if frame.GetFrameStrata then
+    local parentStrata = frame:GetFrameStrata()
+    if parentStrata == "DIALOG" or parentStrata == "FULLSCREEN" or parentStrata == "FULLSCREEN_DIALOG" or parentStrata == "TOOLTIP" then
+      strata = parentStrata
+    end
+  end
+  btn:SetFrameStrata(strata)
   local level = 1
-  if parent.GetFrameLevel then
-    level = parent:GetFrameLevel() or 1
+  if frame.GetFrameLevel then
+    level = frame:GetFrameLevel() or 1
   end
   if level < 1 then
     level = 1
   end
-  if btn.SetFrameLevel then
-    btn:SetFrameLevel(level + 10)
-  end
+  btn:SetFrameLevel(level + 40)
+  btn:Show()
 end
 
--- Sits on the gold row, left of the coin frame, so the close button stays clear.
-local function anchorButton(btn, frame)
-  btn:SetParent(frame)
-  btn:ClearAllPoints()
-  local money = getglobal(frame:GetName() .. "MoneyFrame")
-  if money then
-    btn:SetPoint("RIGHT", money, "LEFT", -6, 0)
-  else
-    btn:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 10, -228)
-  end
-  raiseButton(btn)
-  if frame.GetID and frame:GetID() == 0 then
-    btn:Show()
-  else
-    btn:Hide()
-  end
-end
-
-local function watchFrame(btn, frame)
-  if not frame or not frame.HookScript or frame.onyxiaGoldSortWatch then
-    return
-  end
-  frame.onyxiaGoldSortWatch = true
-  frame:HookScript("OnShow", function(self)
-    if self:GetID() == 0 then
-      anchorButton(btn, self)
-    elseif btn:GetParent() == self then
-      btn:Hide()
-    end
-  end)
-end
-
-function BagSort:EnsureButton()
-  if type(getglobal) == "function" and getglobal(BUTTON_NAME) then
-    return
-  end
-  if type(CreateFrame) ~= "function" or not ContainerFrame1 then
-    return
-  end
-  local btn = CreateFrame("Button", BUTTON_NAME, ContainerFrame1, "UIPanelButtonTemplate")
-  btn:SetWidth(48)
+local function styleSortButton(btn)
+  btn:SetWidth(64)
   btn:SetHeight(22)
   btn:SetText("Sort")
+  local label = getglobal(btn:GetName() .. "Text")
+  if label then
+    label:SetText("Sort")
+    label:Show()
+  end
   btn:SetScript("OnClick", function()
+    -- Swaps run in this click. PickupContainerItem is not deferred.
     BagSort:Sort()
   end)
   btn:SetScript("OnEnter", function(self)
@@ -596,16 +588,61 @@ function BagSort:EnsureButton()
       GameTooltip:Hide()
     end
   end)
-  local frames = NUM_CONTAINER_FRAMES or 13
-  local shownBackpack = nil
-  for i = 1, frames do
-    local frame = getglobal("ContainerFrame" .. i)
-    watchFrame(btn, frame)
-    if frame and frame.GetID and frame:GetID() == 0 and frame.IsShown and frame:IsShown() then
-      shownBackpack = frame
-    end
-  end
-  anchorButton(btn, shownBackpack or ContainerFrame1)
 end
 
+function BagSort:InstallHooks()
+  if self.hooksInstalled or type(hooksecurefunc) ~= "function" then
+    return
+  end
+  self.hooksInstalled = true
+  if type(ContainerFrame_OnShow) == "function" then
+    hooksecurefunc("ContainerFrame_OnShow", function(frame)
+      if frame and frame.GetID and frame:GetID() == 0 then
+        BagSort:EnsureButton()
+      end
+    end)
+  end
+  if type(ContainerFrame_OnHide) == "function" then
+    hooksecurefunc("ContainerFrame_OnHide", function(frame)
+      local btn = getglobal(BUTTON_NAME)
+      if btn and frame and btn.GetParent and btn:GetParent() == frame then
+        btn:Hide()
+      end
+    end)
+  end
+end
+
+function BagSort:EnsureButton()
+  self:InstallHooks()
+  if type(CreateFrame) ~= "function" or type(getglobal) ~= "function" then
+    return
+  end
+  local btn = getglobal(BUTTON_NAME)
+  if not btn then
+    if not ContainerFrame1 then
+      return
+    end
+    btn = CreateFrame("Button", BUTTON_NAME, ContainerFrame1, "UIPanelButtonTemplate")
+    styleSortButton(btn)
+    btn:Hide()
+  end
+  local frame = shownBackpack()
+  if frame then
+    anchorButton(btn, frame)
+  else
+    btn:Hide()
+  end
+end
+
+local sortEvents = CreateFrame("Frame", "OnyxiaGoldBagSortEvents")
+sortEvents:RegisterEvent("PLAYER_LOGIN")
+sortEvents:RegisterEvent("BAG_UPDATE")
+sortEvents:SetScript("OnEvent", function(_, event, bag)
+  if event == "BAG_UPDATE" and tonumber(bag) ~= 0 then
+    return
+  end
+  BagSort:EnsureButton()
+end)
+
+BagSort:InstallHooks()
 BagSort:EnsureButton()

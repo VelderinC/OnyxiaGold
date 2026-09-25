@@ -47,6 +47,9 @@ function DB:DefaultSettings()
     capitalReservePercent = 0.10,
     showAboveSkill = false,
     showBeyondGold = false,
+    -- /og window size. Matches the UI defaults; a resize overwrites these.
+    windowWidth = 1080,
+    windowHeight = 884,
   }
 end
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.25 — Sort button, window size, quality rims
+
+- The backpack Sort button sits in the title bar, just to the right of the portrait, and is shown again each time that backpack opens. One click still stacks items and packs them to the back.
+- The /og window has a corner grip. Its width and height are saved and come back after /reload and relog. Dragging the window still moves it.
+- Uncommon, rare, epic, and better items get a thin quality rim on every default bag slot. Poor and common items stay plain.
+
 ## 0.1.24 — External market snapshot
 
 - `tools/OnyxiaGoldSync` downloads the Onyxia Alliance snapshot from ah.nerfed.net and writes a gitignored Lua file. The addon still loads when that file is missing.

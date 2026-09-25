@@ -69,32 +69,46 @@ function Mail:ScanInbox()
   local claimable = 0
   local pending = 0
   local pendingEta
+  local items = {}
 
   for i = 1, numItems do
-    local _, _, _, _, money, CODAmount = GetInboxHeaderInfo(i)
+    local _, _, _, _, money, CODAmount, _, itemCount = GetInboxHeaderInfo(i)
     money = tonumber(money) or 0
     CODAmount = tonumber(CODAmount) or 0
+    itemCount = tonumber(itemCount) or 0
 
-    -- COD is a liability, never wealth.
+    -- COD is a liability, never wealth. Its attachments are not stock.
     if CODAmount > 0 then
       -- skip
-    elseif money > 0 then
-      claimable = claimable + money
     else
-      local invoiceType, _, _, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin = GetInboxInvoiceInfo(i)
-      if invoiceType == "seller_temp_invoice" then
-        pending = pending + sellerInvoiceAmount(bid, deposit, consignment)
-        if etaHour ~= nil or etaMin ~= nil then
-          pendingEta = {
-            hour = tonumber(etaHour) or 0,
-            min = tonumber(etaMin) or 0,
-          }
+      if itemCount > 0 and type(GetInboxItemLink) == "function" and type(GetInboxItem) == "function" then
+        for attach = 1, itemCount do
+          local link = GetInboxItemLink(i, attach)
+          local _, _, count = GetInboxItem(i, attach)
+          local itemID = OnyxiaGold.ParseItemID(link)
+          if itemID then
+            items[itemID] = (items[itemID] or 0) + (tonumber(count) or 1)
+          end
         end
-        if moneyDelay then
-          -- captured for later UI; 3.3.5 MailFrame often has no extra returns
+      end
+      if money > 0 then
+        claimable = claimable + money
+      else
+        local invoiceType, _, _, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin = GetInboxInvoiceInfo(i)
+        if invoiceType == "seller_temp_invoice" then
+          pending = pending + sellerInvoiceAmount(bid, deposit, consignment)
+          if etaHour ~= nil or etaMin ~= nil then
+            pendingEta = {
+              hour = tonumber(etaHour) or 0,
+              min = tonumber(etaMin) or 0,
+            }
+          end
+          if moneyDelay then
+            -- captured for later UI; 3.3.5 MailFrame often has no extra returns
+          end
+        elseif invoiceType and invoiceType ~= "buyer" and moneyDelay and tonumber(moneyDelay) and tonumber(moneyDelay) > 0 then
+          pending = pending + sellerInvoiceAmount(bid, deposit, consignment)
         end
-      elseif invoiceType and invoiceType ~= "buyer" and moneyDelay and tonumber(moneyDelay) and tonumber(moneyDelay) > 0 then
-        pending = pending + sellerInvoiceAmount(bid, deposit, consignment)
       end
     end
   end
@@ -105,6 +119,7 @@ function Mail:ScanInbox()
   row.mail.pendingEta = pendingEta
   row.mail.snapshotTimestamp = time()
   row.mail.snapshotComplete = complete
+  row.mail.items = items
   row.mail.visibleCount = numItems
   row.mail.totalCount = totalItems
   -- Kept so older readers still see the same counts.
@@ -160,6 +175,15 @@ function Mail:GetTotalCount()
     return tonumber(m.inboxTotal) or 0
   end
   return nil
+end
+
+function Mail:GetItemCount(itemID)
+  itemID = tonumber(itemID)
+  local m = mailRow()
+  if not itemID or not m or type(m.items) ~= "table" then
+    return 0
+  end
+  return tonumber(m.items[itemID]) or 0
 end
 
 function Mail:GetClaimableGold()

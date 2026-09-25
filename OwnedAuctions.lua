@@ -127,6 +127,23 @@ function Owned:OnClosed()
   -- Keep last snapshot; age is derived from timestamp.
 end
 
+function Owned:GetListedCount(itemID)
+  itemID = tonumber(itemID)
+  local row = rec()
+  if not itemID or not row or type(row.auctions.listings) ~= "table" then
+    return 0
+  end
+  local n = 0
+  local listings = row.auctions.listings
+  for i = 1, table.getn(listings) do
+    local listing = listings[i]
+    if listing and tonumber(listing.itemID) == itemID then
+      n = n + (tonumber(listing.count) or 0)
+    end
+  end
+  return n
+end
+
 function Owned:GetAskingValue()
   local row = rec()
   return row and (tonumber(row.auctions.askingValue) or 0) or 0

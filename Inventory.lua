@@ -198,3 +198,115 @@ end
 function Inventory:GetBagAge()
   return 0
 end
+
+-- Equipped gear is recorded so a tool on him counts. It is not bag stock
+-- and it is not a disenchant or vendor row.
+function Inventory:ScanEquipment()
+  local row = rec()
+  if not row then
+    return {}
+  end
+  if type(row.inventory.equipped) ~= "table" then
+    row.inventory.equipped = {}
+  end
+  local equipped = {}
+  if type(GetInventoryItemLink) == "function" then
+    for slot = 1, 19 do
+      local link = GetInventoryItemLink("player", slot)
+      local itemID = OnyxiaGold.ParseItemID(link)
+      if itemID then
+        addCount(equipped, itemID, 1)
+      end
+    end
+  end
+  row.inventory.equipped = equipped
+  return equipped
+end
+
+function Inventory:GetEquippedCount(itemID)
+  itemID = tonumber(itemID)
+  local row = rec()
+  if not itemID or not row or type(row.inventory.equipped) ~= "table" then
+    return 0
+  end
+  return tonumber(row.inventory.equipped[itemID]) or 0
+end
+
+function Inventory:GetOnPersonCount(itemID)
+  return self:GetBagCount(itemID) + self:GetEquippedCount(itemID)
+end
+
+local LATER_STONE_KEYS = {
+  "ALCHEMISTS_STONE",
+  "ASSASSINS_ALCHEMIST_STONE",
+  "GUARDIANS_ALCHEMIST_STONE",
+  "REDEEMERS_ALCHEMIST_STONE",
+  "MIGHTY_ALCHEMISTS_STONE",
+  "INDESTRUCTIBLE_ALCHEMISTS_STONE",
+}
+
+function Inventory:UnconfirmedStoneOnPerson()
+  local items = OnyxiaGold.Data and OnyxiaGold.Data.Items
+  if not items then
+    return false
+  end
+  for i = 1, table.getn(LATER_STONE_KEYS) do
+    local def = items[LATER_STONE_KEYS[i]]
+    if def and def.id and self:GetOnPersonCount(def.id) > 0 then
+      return true
+    end
+  end
+  return false
+end
+
+-- Nil means the bag limit is unknown and must not cut a buy.
+function Inventory:GetFreeGeneralSlots()
+  if type(GetContainerNumFreeSlots) == "function" then
+    local total = 0
+    local bagSlots = NUM_BAG_SLOTS or 4
+    for bag = 0, bagSlots do
+      local freeSlots, bagType = GetContainerNumFreeSlots(bag)
+      if bag == 0 or bagType == 0 then
+        total = total + (tonumber(freeSlots) or 0)
+      end
+    end
+    return total
+  end
+  local row = rec()
+  if row and row.inventory and row.inventory.freeSlots ~= nil then
+    return tonumber(row.inventory.freeSlots) or 0
+  end
+  return nil
+end
+
+function Inventory:GetStackSize(itemID)
+  itemID = tonumber(itemID)
+  local row = rec()
+  if row and row.inventory and type(row.inventory.stackSize) == "table" and itemID then
+    local stored = tonumber(row.inventory.stackSize[itemID])
+    if stored and stored > 0 then
+      return stored
+    end
+  end
+  if itemID and type(GetItemInfo) == "function" then
+    local _, _, _, _, _, _, _, stack = GetItemInfo(itemID)
+    stack = tonumber(stack)
+    if stack and stack > 0 then
+      return stack
+    end
+  end
+  return nil
+end
+
+function Inventory:GetPartialRoom(itemID)
+  itemID = tonumber(itemID)
+  local row = rec()
+  if not itemID or not row or type(row.inventory.partialRoom) ~= "table" then
+    return 0
+  end
+  local room = tonumber(row.inventory.partialRoom[itemID]) or 0
+  if room < 0 then
+    room = 0
+  end
+  return room
+end

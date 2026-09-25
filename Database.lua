@@ -147,7 +147,13 @@ function DB:EmptyCharacter()
     knownRecipes = {},
     recipeScans = {},
     specialisations = {},
-    inventory = { bags = {}, timestamp = nil },
+    inventory = {
+      bags = {},
+      equipped = {},
+      timestamp = nil,
+      stackSize = {},
+      partialRoom = {},
+    },
     bank = { items = {}, timestamp = nil },
     mail = {
       claimableGold = 0,
@@ -157,6 +163,7 @@ function DB:EmptyCharacter()
       snapshotComplete = nil,
       visibleCount = nil,
       totalCount = nil,
+      items = {},
     },
     auctions = {
       listings = {},
@@ -191,11 +198,23 @@ function DB:EnsureCharacterShape(rec)
   if type(rec.inventory.bags) ~= "table" then
     rec.inventory.bags = {}
   end
+  if type(rec.inventory.equipped) ~= "table" then
+    rec.inventory.equipped = {}
+  end
+  if type(rec.inventory.stackSize) ~= "table" then
+    rec.inventory.stackSize = {}
+  end
+  if type(rec.inventory.partialRoom) ~= "table" then
+    rec.inventory.partialRoom = {}
+  end
   rec.bank = type(rec.bank) == "table" and rec.bank or empty.bank
   if type(rec.bank.items) ~= "table" then
     rec.bank.items = {}
   end
   rec.mail = type(rec.mail) == "table" and rec.mail or empty.mail
+  if type(rec.mail.items) ~= "table" then
+    rec.mail.items = {}
+  end
   rec.auctions = type(rec.auctions) == "table" and rec.auctions or empty.auctions
   if type(rec.auctions.listings) ~= "table" then
     rec.auctions.listings = {}

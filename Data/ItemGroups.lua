@@ -23,7 +23,7 @@ local Items = {
   LESSER_COSMIC_ESSENCE = { id = 34056, name = "Lesser Cosmic Essence" },
   GREATER_COSMIC_ESSENCE = { id = 34055, name = "Greater Cosmic Essence" },
 
-  -- Shards (3 Small <-> 1 Large)
+  -- Prismatic shards are a priced pair. Dream Shards combine one way.
   SMALL_PRISMATIC_SHARD = { id = 22448, name = "Small Prismatic Shard" },
   LARGE_PRISMATIC_SHARD = { id = 22449, name = "Large Prismatic Shard" },
   SMALL_DREAM_SHARD = { id = 34053, name = "Small Dream Shard" },
@@ -32,6 +32,42 @@ local Items = {
   -- WotLK bars
   SARONITE_BAR = { id = 36913, name = "Saronite Bar" },
   TITANIUM_BAR = { id = 41163, name = "Titanium Bar" },
+
+  -- Alchemy transmute reagents and outputs. Names only; prices come from the scan.
+  -- Philosopher's Stone is a tool, not an input. Later stones are named only.
+  -- Their tool-category membership is unset, so they are not valid transmute tools yet.
+  PHILOSOPHERS_STONE = { id = 9149, name = "Philosopher's Stone" },
+  ALCHEMISTS_STONE = { id = 35748, name = "Alchemist's Stone" },
+  ASSASSINS_ALCHEMIST_STONE = { id = 35749, name = "Assassin's Alchemist Stone" },
+  GUARDIANS_ALCHEMIST_STONE = { id = 35750, name = "Guardian's Alchemist Stone" },
+  REDEEMERS_ALCHEMIST_STONE = { id = 35751, name = "Redeemer's Alchemist Stone" },
+  MIGHTY_ALCHEMISTS_STONE = { id = 44322, name = "Mighty Alchemist's Stone" },
+  INDESTRUCTIBLE_ALCHEMISTS_STONE = { id = 44323, name = "Indestructible Alchemist's Stone" },
+  MERCURIAL_STONE = { id = 31080, name = "Mercurial Stone" },
+  RUNED_FEL_IRON_ROD = { id = 22461, name = "Runed Fel Iron Rod" },
+  RUNED_ETERNIUM_ROD = { id = 22463, name = "Runed Eternium Rod" },
+  DARK_JADE = { id = 36932, name = "Dark Jade" },
+  HUGE_CITRINE = { id = 36929, name = "Huge Citrine" },
+  ETERNAL_FIRE = { id = 36860, name = "Eternal Fire" },
+  EARTHSIEGE_DIAMOND = { id = 41334, name = "Earthsiege Diamond" },
+  BLOODSTONE = { id = 36917, name = "Bloodstone" },
+  CHALCEDONY = { id = 36923, name = "Chalcedony" },
+  ETERNAL_AIR = { id = 35623, name = "Eternal Air" },
+  SKYFLARE_DIAMOND = { id = 41266, name = "Skyflare Diamond" },
+  MONARCH_TOPAZ = { id = 36930, name = "Monarch Topaz" },
+  ETERNAL_SHADOW = { id = 35627, name = "Eternal Shadow" },
+  AMETRINE = { id = 36931, name = "Ametrine" },
+  AUTUMNS_GLOW = { id = 36921, name = "Autumn's Glow" },
+  ETERNAL_LIFE = { id = 35625, name = "Eternal Life" },
+  KINGS_AMBER = { id = 36922, name = "King's Amber" },
+  TWILIGHT_OPAL = { id = 36927, name = "Twilight Opal" },
+  DREADSTONE = { id = 36928, name = "Dreadstone" },
+  SKY_SAPPHIRE = { id = 36924, name = "Sky Sapphire" },
+  MAJESTIC_ZIRCON = { id = 36925, name = "Majestic Zircon" },
+  FOREST_EMERALD = { id = 36933, name = "Forest Emerald" },
+  EYE_OF_ZUL = { id = 36934, name = "Eye of Zul" },
+  SCARLET_RUBY = { id = 36918, name = "Scarlet Ruby" },
+  CARDINAL_RUBY = { id = 36919, name = "Cardinal Ruby" },
 
   -- Upcoming economic materials (watchlist / later engines)
   NETHERWEAVE_CLOTH = { id = 21877, name = "Netherweave Cloth" },

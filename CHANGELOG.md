@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.3 — Factory Operations, Phase A
+## 0.1.3 — Factory Operations, Phase A and Phase B
 
-Foundational planner and snapshot corrections. Session reservation, Factory Mail, and Factory Inventory are not in this version.
+Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials, and cloned auction depth inside one session plan. Factory Mail and Factory Inventory are not in this version.
 
 - Transmute: Titanium (spell 60350) requires Alchemy 395. 440 is difficulty colour, not the skill requirement.
 - Min, P10, P25, median, P75, and weighted mean are computed from the full runtime buyout book. Only the persisted acquisition depth is truncated. `depthCoveredQuantity` is stored separately from `buyoutQuantity`. `GetAcquisitionQuote` will not price past covered depth.
@@ -10,7 +10,15 @@ Foundational planner and snapshot corrections. Session reservation, Factory Mail
 - Known recipes are profession-scoped. A complete profession scan replaces that profession's set. Saved flat sets migrate (database v4).
 - A mailbox with unloaded mail persists `snapshotComplete = false` plus `visibleCount` and `totalCount`. The UI does not present that subtotal as exact.
 - Own auctions persist `shown`, `total`, and `complete` (`shown >= total`). An incomplete owner list shows Listed as approximate.
-- Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`. `sensibleCrafts` does not yet apply an output-liquidity model.
+- Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`.
+- `sensibleCrafts` is a crude output cap. A plan will not add more output units than the visible buyout book already shows. The tooltip calls it a cap, not a liquidity model. It is not a sale rate.
+- `SessionState` rebuilds on each plan. A selected action reserves its cash, the bag units it uses, and the auction units it would buy. The next action sees what remains, including output units already planned. The saved market snapshot is not modified.
+- Dream Shard combines one way: 3 Small Dream Shards into 1 Dream Shard. The addon does not recommend a split.
+- Prismatic shards stay a priced pair. They are not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented.
+- Epic gem transmutes share one `transmute_20h` cooldown per plan. Earthsiege and Skyflare are multi-input and are not on that cooldown. Cardinal Ruby is not an action because its minimum skill is unset. Philosopher's Stone is a tool, not a reagent. Transmute Master stays the 1.20 expectation only on transmutes that support it.
+- The live auction page for the next buy is marked with a stop, the units that still fit, and the gold lost if that auction is over the stop. A one-unit scrap that cannot fill the recipe is marked scrap. The post box is filled at or above the floor. Querying stops when the visible page is entirely over the stop. He presses Blizzard's button.
+- The output cap's room is the visible book minus bags, bank, mail items, and his own listings. Partial or stale snapshots stay marked and still count. If he already holds at least that book, the row says post or hold. Stock is a count, not an asking price.
+- A transmute needs Philosopher's Stone (item 9149) in bags or equipped. Later stones stay "tool not confirmed". A rod in the bank is a withdraw line, not a finished craft. Buy quantity stops at free bag slots. Equipped gear is not a disenchant or vendor row. Tools are not consumed in the profit math.
 
 ## 0.1.2 — Character State & Capital Awareness
 

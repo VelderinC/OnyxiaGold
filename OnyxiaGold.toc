@@ -39,6 +39,7 @@ SessionState.lua
 ActionPlanner.lua
 AuctionStop.lua
 TradeLog.lua
+ExternalMarket.lua
 UI.lua
 BagSort.lua
 Watermark.lua

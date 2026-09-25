@@ -295,6 +295,19 @@ end
 
 function Prices:GetAcquisitionQuote(itemID, quantity)
   quantity = math.floor(tonumber(quantity) or 0)
+  local live = record(itemID)
+  if live and live.source == "external" then
+    return {
+      requestedQuantity = quantity,
+      filledQuantity = 0,
+      totalCost = 0,
+      averageUnitCost = nil,
+      marginalUnitCost = nil,
+      levelsConsumed = 0,
+      complete = false,
+      depthCoveredQuantity = 0,
+    }
+  end
   local covered = self:GetDepthCoveredQuantity(itemID)
   local quote = {
     requestedQuantity = quantity,

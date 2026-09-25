@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.36 — Visual skin
+
+- The window, buttons, and scan bar use the OnyxiaGold atlas. This is a visual skin, not an economic change. The next errand stays on the line at the top, in the same words.
+
 ## 0.1.35 — Character errands
 
 - When the next step cannot be done from where you are, the line at the top names that errand first. The Auction House, when the next step is a buy or a post and that window is closed. The mailbox, when sale gold or a purchased item is waiting and the plan needs it. The bank, when the reagent or the transmutation stone is in the bank and not in the bags: withdraw that item. Alchemy or Enchanting, when the next step is a craft and that window is closed.

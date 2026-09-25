@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.35"
+OnyxiaGold.Version = "0.1.36"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}

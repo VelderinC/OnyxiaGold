@@ -9,6 +9,14 @@ OnyxiaGold.UI = OnyxiaGold.UI or {}
 
 local UI = OnyxiaGold.UI
 
+local function skinCall(name)
+  local skin = OnyxiaGold.Skin
+  local fn = skin and skin[name]
+  if fn then
+    fn(skin, UI)
+  end
+end
+
 local FRAME_WIDTH = 1080
 local FRAME_HEIGHT = 884
 local MIN_WIDTH = 1080
@@ -1030,6 +1038,7 @@ function UI:Create()
       UI:UpdateList()
     end
     UI:SaveWindowSize()
+    skinCall("PaintScan")
   end)
 
   self.frame = frame
@@ -1059,8 +1068,10 @@ function UI:Create()
   self.listTitle = listTitle
   self.nextAction = nextAction
   self.heldButton = heldBtn
+  self.headerRule = headerRule
   self.listMode = "actions"
   self:LayoutColumns()
+  skinCall("Apply")
 end
 
 function UI:ShowCapitalTooltip(owner)
@@ -1368,6 +1379,7 @@ function UI:SetStatus(text)
     self:Create()
   end
   self.status:SetText(text or "")
+  skinCall("PaintStatus")
 end
 
 local function formatRemaining(seconds)
@@ -1484,6 +1496,7 @@ function UI:PaintScanProgress()
   if self.scanBarText then
     self.scanBarText:SetText(text)
   end
+  skinCall("PaintScan")
 end
 
 function UI:RefreshHeader()
@@ -1565,6 +1578,7 @@ function UI:RefreshHeader()
     end
     self.marketStatus:SetText(string.format("Market: %s    Quick %s    Full %s", label, q, f))
   end
+  skinCall("PaintHeader")
 end
 
 function UI:RefreshMarketStatus()
@@ -2050,6 +2064,7 @@ function UI:UpdateList()
   paintHeaders(self)
   if self.listMode == "inventory" then
     self:UpdateInventoryList()
+    skinCall("PaintList")
     return
   end
   local results = {}
@@ -2109,6 +2124,7 @@ function UI:UpdateList()
     end
     end
   end
+  skinCall("PaintList")
 end
 
 function UI:Refresh()

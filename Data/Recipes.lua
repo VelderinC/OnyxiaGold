@@ -285,3 +285,138 @@ OnyxiaGold.Data.Transmutes = {
     notes = "Minimum skill is unset. Not an action.",
   },
 }
+
+-- One shared 20-hour group. Skill numbers are the spell-page minimums.
+-- A nil skill is unset and must not become an action. Do not encode a stored 1.
+local function sharedCooldown(id, name, spell, skill, inputItem, outputItem, note)
+  local req = {
+    recipeSpellID = spell,
+    cooldown = "transmute_20h",
+  }
+  local unset = skill == nil
+  if unset then
+    req.skillUnset = true
+  else
+    req.minimumSkill = skill
+  end
+  return {
+    id = id,
+    name = name,
+    typeLabel = "Transmute",
+    skillUnset = unset or nil,
+    inputs = {
+      { itemID = inputItem.id, count = 1 },
+    },
+    outputs = {
+      { itemID = outputItem.id, count = 1 },
+    },
+    -- Section 2.1 applies the 1.20 expectation to transmutes. Elemental Fire
+    -- is the unset mastery and is not in this list.
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool(req),
+    notes = note or "Shares the 20-hour transmute group. One cast from that group.",
+  }
+end
+
+local function addShared(row)
+  table.insert(OnyxiaGold.Data.Transmutes, row)
+end
+
+local cycleNote = "Shares the 20-hour transmute group. One cast. Transmute Master is expected value only."
+
+-- Eternal cycle. Skill 400. One to one.
+local eternals = {
+  { "eternal_life_to_shadow", "Eternal Life to Shadow", 53771, I.ETERNAL_LIFE, I.ETERNAL_SHADOW },
+  { "eternal_life_to_fire", "Eternal Life to Fire", 53773, I.ETERNAL_LIFE, I.ETERNAL_FIRE },
+  { "eternal_fire_to_water", "Eternal Fire to Water", 53774, I.ETERNAL_FIRE, I.ETERNAL_WATER },
+  { "eternal_fire_to_life", "Eternal Fire to Life", 53775, I.ETERNAL_FIRE, I.ETERNAL_LIFE },
+  { "eternal_air_to_water", "Eternal Air to Water", 53776, I.ETERNAL_AIR, I.ETERNAL_WATER },
+  { "eternal_air_to_earth", "Eternal Air to Earth", 53777, I.ETERNAL_AIR, I.ETERNAL_EARTH },
+  { "eternal_shadow_to_earth", "Eternal Shadow to Earth", 53779, I.ETERNAL_SHADOW, I.ETERNAL_EARTH },
+  { "eternal_shadow_to_life", "Eternal Shadow to Life", 53780, I.ETERNAL_SHADOW, I.ETERNAL_LIFE },
+  { "eternal_earth_to_air", "Eternal Earth to Air", 53781, I.ETERNAL_EARTH, I.ETERNAL_AIR },
+  { "eternal_earth_to_shadow", "Eternal Earth to Shadow", 53782, I.ETERNAL_EARTH, I.ETERNAL_SHADOW },
+  { "eternal_water_to_air", "Eternal Water to Air", 53783, I.ETERNAL_WATER, I.ETERNAL_AIR },
+  { "eternal_water_to_fire", "Eternal Water to Fire", 53784, I.ETERNAL_WATER, I.ETERNAL_FIRE },
+}
+for i = 1, table.getn(eternals) do
+  local row = eternals[i]
+  addShared(sharedCooldown(row[1], row[2], row[3], 400, row[4], row[5], cycleNote))
+end
+
+-- Old metals. Skill 225.
+addShared(sharedCooldown(
+  "iron_to_gold", "Iron to Gold", 11479, 225, I.IRON_BAR, I.GOLD_BAR, cycleNote
+))
+addShared(sharedCooldown(
+  "mithril_to_truesilver", "Mithril to Truesilver", 11480, 225, I.MITHRIL_BAR, I.TRUESILVER_BAR, cycleNote
+))
+
+-- Vanilla essence cycle. Skill 275. One to one.
+local essences = {
+  { "essence_air_to_fire", "Essence of Air to Fire", 17559, I.ESSENCE_OF_AIR, I.ESSENCE_OF_FIRE },
+  { "essence_fire_to_earth", "Essence of Fire to Earth", 17560, I.ESSENCE_OF_FIRE, I.ESSENCE_OF_EARTH },
+  { "essence_earth_to_water", "Essence of Earth to Water", 17561, I.ESSENCE_OF_EARTH, I.ESSENCE_OF_WATER },
+  { "essence_water_to_air", "Essence of Water to Air", 17562, I.ESSENCE_OF_WATER, I.ESSENCE_OF_AIR },
+  { "essence_undeath_to_water", "Essence of Undeath to Water", 17563, I.ESSENCE_OF_UNDEATH, I.ESSENCE_OF_WATER },
+  { "essence_water_to_undeath", "Essence of Water to Undeath", 17564, I.ESSENCE_OF_WATER, I.ESSENCE_OF_UNDEATH },
+  { "essence_living_to_earth", "Living Essence to Earth", 17565, I.LIVING_ESSENCE, I.ESSENCE_OF_EARTH },
+  { "essence_earth_to_living", "Essence of Earth to Living", 17566, I.ESSENCE_OF_EARTH, I.LIVING_ESSENCE },
+}
+for i = 1, table.getn(essences) do
+  local row = essences[i]
+  addShared(sharedCooldown(row[1], row[2], row[3], 275, row[4], row[5], cycleNote))
+end
+
+-- Trainer primals. Skill 350. One to one.
+local primals = {
+  { "primal_air_to_fire", "Primal Air to Fire", 28566, I.PRIMAL_AIR, I.PRIMAL_FIRE },
+  { "primal_earth_to_water", "Primal Earth to Water", 28567, I.PRIMAL_EARTH, I.PRIMAL_WATER },
+  { "primal_fire_to_earth", "Primal Fire to Earth", 28568, I.PRIMAL_FIRE, I.PRIMAL_EARTH },
+  { "primal_water_to_air", "Primal Water to Air", 28569, I.PRIMAL_WATER, I.PRIMAL_AIR },
+}
+for i = 1, table.getn(primals) do
+  local row = primals[i]
+  addShared(sharedCooldown(row[1], row[2], row[3], 350, row[4], row[5], cycleNote))
+end
+
+-- Discovered primals store a required skill of 1. That number is unset.
+local discovered = {
+  { "primal_shadow_to_water", "Primal Shadow to Water", 28580, I.PRIMAL_SHADOW, I.PRIMAL_WATER },
+  { "primal_water_to_shadow", "Primal Water to Shadow", 28581, I.PRIMAL_WATER, I.PRIMAL_SHADOW },
+  { "primal_mana_to_fire", "Primal Mana to Fire", 28582, I.PRIMAL_MANA, I.PRIMAL_FIRE },
+  { "primal_fire_to_mana", "Primal Fire to Mana", 28583, I.PRIMAL_FIRE, I.PRIMAL_MANA },
+  { "primal_life_to_earth", "Primal Life to Earth", 28584, I.PRIMAL_LIFE, I.PRIMAL_EARTH },
+  { "primal_earth_to_life", "Primal Earth to Life", 28585, I.PRIMAL_EARTH, I.PRIMAL_LIFE },
+}
+for i = 1, table.getn(discovered) do
+  local row = discovered[i]
+  addShared(sharedCooldown(
+    row[1], row[2], row[3], nil, row[4], row[5],
+    "Minimum skill is unset. Not an action."
+  ))
+end
+
+-- Eternal Might's required skill is blank. Not an action. Not a one-to-one cycle.
+addShared({
+  id = "eternal_might",
+  name = "Eternal Might",
+  typeLabel = "Transmute",
+  skillUnset = true,
+  inputs = {
+    { itemID = I.ETERNAL_AIR.id, count = 1 },
+    { itemID = I.ETERNAL_EARTH.id, count = 1 },
+    { itemID = I.ETERNAL_FIRE.id, count = 1 },
+    { itemID = I.ETERNAL_WATER.id, count = 1 },
+  },
+  outputs = {
+    { itemID = I.ETERNAL_MIGHT.id, count = 1 },
+  },
+  supportsTransmuteMastery = true,
+  requirements = alchemyTool({
+    recipeSpellID = 54020,
+    skillUnset = true,
+    cooldown = "transmute_20h",
+  }),
+  notes = "Minimum skill is unset. Not an action.",
+})

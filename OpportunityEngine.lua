@@ -51,6 +51,12 @@ local function newOpportunity(fields)
     isExpectedValue = fields.isExpectedValue and true or false,
     -- false means the relationship is priced and must not become an action.
     actionable = fields.actionable ~= false,
+    winnerName = fields.winnerName,
+    runnerUpName = fields.runnerUpName,
+    runnerUpProfit = fields.runnerUpProfit,
+    forgoneLine = fields.forgoneLine,
+    sharedCooldownRow = fields.sharedCooldownRow and true or false,
+    cooldownDecision = fields.cooldownDecision,
   }
 end
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11 — Profit breakdown
+
+- Each action row shows the depth-walk buy cost, the P25 sale price, and the proceeds after the cut, plus an off-by-default checkbox for Alchemy and Enchanting crafts above current skill.
+
 ## 0.1.10 — Click to buy
 
 - A buy row searches the live auction page, then one click buys one listing at or under the stop.

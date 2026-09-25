@@ -260,6 +260,7 @@ local function planInputs(opp, crafts)
       owned = 0
     end
     local toBuy = needed - owned
+    local buyCost = 0
     if toBuy > 0 then
       local session = OnyxiaGold.SessionState
       local part
@@ -271,6 +272,7 @@ local function planInputs(opp, crafts)
       if not part then
         return nil
       end
+      buyCost = part
       cash = cash + part
     end
     local unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
@@ -280,6 +282,7 @@ local function planInputs(opp, crafts)
       count = count,
       ownedUnits = owned,
       buyUnits = toBuy,
+      buyCost = buyCost,
     })
   end
   return lines, cash, ownedValue + cash, ownedValue, true
@@ -385,7 +388,7 @@ local function maxCraftsForCash(opp, owned, deployable, capMax)
   return lo
 end
 
-function Planner:Personalize(opp, deployable, afterMailDeployable)
+function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill)
   deployable = tonumber(deployable) or 0
   -- 0 means the caller is ignoring mail (cash-allocation loop).
   -- Otherwise this is Capital:GetSpendableAfterMail(), already reserve-adjusted,
@@ -403,6 +406,30 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   local cap = { executable = true }
   if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
     cap = OnyxiaGold.Capabilities:CanExecute(opp.requirements)
+  end
+  -- Display-only. A skill preview does not reserve cash, bags, or depth,
+  -- and it does not change which rows are actionable when the setting is off.
+  local skillPreview = false
+  local previewProfession = nil
+  local previewNeed = nil
+  if ignoreSkill and not cap.executable and cap.missingSkill and not cap.skillUnset then
+    local req = opp.requirements
+    local profession = req and req.profession
+    local need = req and tonumber(req.minimumSkill)
+    if need and need > 0 and (profession == "Alchemy" or profession == "Enchanting") then
+      local relaxed = {}
+      for key, value in pairs(req) do
+        relaxed[key] = value
+      end
+      relaxed.minimumSkill = 0
+      local again = OnyxiaGold.Capabilities:CanExecute(relaxed)
+      if again.executable then
+        cap = again
+        skillPreview = true
+        previewProfession = profession
+        previewNeed = need
+      end
+    end
   end
 
   local marketProfitable = tonumber(opp.marketProfitableCrafts)
@@ -470,6 +497,9 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     reason = cap.reason,
     outputCapped = false,
     outputCapNote = nil,
+    skillPreview = skillPreview,
+    previewProfession = previewProfession,
+    previewNeed = previewNeed,
   }
 
   local function commit(n)
@@ -692,6 +722,56 @@ local function scoreOf(person)
   return score
 end
 
+-- Numbers already on the action. Sale unit is GetOpportunitySaleUnit (P25).
+-- Proceeds are crafts * netRevenue, the sale side of economicProfit.
+local function breakdownOf(person)
+  local opp = person.opp
+  local crafts = tonumber(person.sensibleCrafts) or 0
+  if crafts <= 0 or type(opp) ~= "table" then
+    return nil
+  end
+  local buys = {}
+  local lines = person.inputLines
+  if type(lines) == "table" then
+    for i = 1, table.getn(lines) do
+      local line = lines[i]
+      local qty = tonumber(line.buyUnits) or 0
+      local cost = tonumber(line.buyCost)
+      if qty > 0 and cost then
+        table.insert(buys, {
+          itemID = line.itemID,
+          count = qty,
+          cost = cost,
+        })
+      end
+    end
+  end
+  local outID = opp.outputItemIDs and opp.outputItemIDs[1]
+  local saleUnit = tonumber(opp.saleUnit)
+  if (not saleUnit or saleUnit <= 0) and outID and OnyxiaGold.Prices and OnyxiaGold.Prices.GetOpportunitySaleUnit then
+    saleUnit = tonumber(OnyxiaGold.Prices:GetOpportunitySaleUnit(outID))
+  end
+  if saleUnit and saleUnit <= 0 then
+    saleUnit = nil
+  end
+  local proceeds = nil
+  local units = nil
+  if saleUnit and outID then
+    proceeds = crafts * (tonumber(opp.netRevenue) or 0)
+    units = crafts * outputPerCraft(opp)
+  end
+  if table.getn(buys) == 0 and not saleUnit then
+    return nil
+  end
+  return {
+    buys = buys,
+    outputItemID = outID,
+    postUnits = units,
+    saleUnit = saleUnit,
+    proceeds = proceeds,
+  }
+end
+
 local function actionFromPerson(person, index)
   local opp = person.opp
   local crafts = person.sensibleCrafts or person.executableCrafts or 0
@@ -755,7 +835,29 @@ local function actionFromPerson(person, index)
     roi = person.roi,
     sourceOpp = opp,
     person = person,
+    breakdown = breakdownOf(person),
   }
+end
+
+local function previewAction(person, index)
+  local action = actionFromPerson(person, index)
+  local profession = person.previewProfession or "Profession"
+  local need = tonumber(person.previewNeed) or 0
+  action.kind = "SKILL_PREVIEW"
+  action.actionable = false
+  action.skillLabel = string.format("Needs %s %d.", profession, need)
+  action.name = action.skillLabel
+  action.state = "SKILL_PREVIEW"
+  action.detail = action.skillLabel .. " Not a buy."
+  return action
+end
+
+function Planner:ShowAboveSkill()
+  return OnyxiaGoldDB
+    and OnyxiaGoldDB.settings
+    and OnyxiaGoldDB.settings.showAboveSkill
+    and true
+    or false
 end
 
 function Planner:ReserveSelected(person)
@@ -833,6 +935,18 @@ function Planner:Refresh()
 
   if OnyxiaGold.SessionState and OnyxiaGold.SessionState.Begin then
     OnyxiaGold.SessionState:Begin(deployable, afterMailSpendable)
+  end
+
+  -- Skill previews are priced on the fresh book, then left out of the greedy
+  -- selection. They are not reserved and they are not buys.
+  local previewPeople = {}
+  if self:ShowAboveSkill() then
+    for i = 1, table.getn(opps) do
+      local person = self:Personalize(opps[i], deployable, afterMailBudget(deployable), true)
+      if person.skillPreview and person.state == "ACTIONABLE_NOW" and (person.sensibleCrafts or 0) > 0 then
+        table.insert(previewPeople, person)
+      end
+    end
   end
 
   local remaining = deployable
@@ -1007,6 +1121,20 @@ function Planner:Refresh()
       claimable = claimable,
       mailPartial = mailPartial and true or false,
     })
+  end
+
+  if table.getn(previewPeople) > 0 then
+    table.sort(previewPeople, function(a, b)
+      local pa = a.economicProfit or 0
+      local pb = b.economicProfit or 0
+      if pa == pb then
+        return (a.previewNeed or 0) < (b.previewNeed or 0)
+      end
+      return pa > pb
+    end)
+    for i = 1, table.getn(previewPeople) do
+      table.insert(self.actions, previewAction(previewPeople[i], 0))
+    end
   end
 
   for i = 1, table.getn(self.actions) do

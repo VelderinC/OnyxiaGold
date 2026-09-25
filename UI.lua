@@ -1769,16 +1769,24 @@ function UI:OnPostClick(row)
   local ownMin = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
     and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
   local floorUnit = tonumber(action.economicFloor) or saleUnit
+  local policyOwn = ownMin
+  if action.flip and ownMin and saleUnit >= ownMin then
+    policyOwn = nil
+  end
   local policy = OnyxiaGold.Lots and OnyxiaGold.Lots.PostPolicy and OnyxiaGold.Lots.PostPolicy({
     economicFloor = floorUnit,
     marketMinimum = marketMin,
-    ownMinimum = ownMin,
+    ownMinimum = policyOwn,
     stackSize = stack,
     stale = stale,
     external = external and true or false,
     liveValidated = not stale and not external,
   })
   local buyout = policy and policy.totalBuyout or math.floor(saleUnit * stack + 0.5)
+  if action.flip and ownMin and policy and policy.targetPrice and policy.targetPrice < ownMin then
+    self:SetStatus("That price would undercut your auction.")
+    return
+  end
   local allowed = OnyxiaGold.Lots and OnyxiaGold.Lots.AllowStartAuction and OnyxiaGold.Lots.AllowStartAuction({
     validated = policy and policy.decision == "post",
     stale = stale,

@@ -1609,6 +1609,15 @@ local function actionFromStep(step, parent, first)
     row.typeLabel = "Buy"
     row.cashRequiredNow = tonumber(step.cash) or 0
     row.detail = "Whole auction lots. Leftover units stay in the plan. Fund this buy from gold in hand."
+    if step.flip then
+      row.flip = true
+      row.typeLabel = "Flip"
+      row.stopUnit = tonumber(step.unit) or 0
+      row.queryName = step.name
+      row.flipCount = tonumber(step.count) or 0
+      row.sortName = step.name
+      row.detail = "Whole auction lot. Fund this buy from gold in hand."
+    end
     if (tonumber(step.excessUnits) or 0) > 0 then
       row.detail = string.format(
         "Leftover %d. Whole auction lots. Fund this buy from gold in hand.",
@@ -1627,6 +1636,25 @@ local function actionFromStep(step, parent, first)
     row.name = step.line or row.name
     row.cashRequiredNow = 0
     row.detail = step.windowHint or "Post lists one stack."
+    if step.flip then
+      local sale = tonumber(step.saleUnit) or 0
+      local count = tonumber(step.count) or 0
+      local gross = sale * count
+      row.flip = true
+      row.typeLabel = "Flip"
+      row.outputItemID = step.itemID
+      row.postCount = count
+      row.stackSize = count
+      row.saleUnit = sale
+      row.stackBuyout = gross
+      row.bid = gross
+      row.buyout = gross
+      row.duration = 2
+      row.expectedRevenue = tonumber(step.proceeds) or 0
+      row.economicFloor = sale
+      row.sortName = step.name
+      row.detail = step.windowHint or "Post the lot you just bought."
+    end
   else
     row.kind = "CRAFT"
     row.typeLabel = step.profession or parent.typeLabel or "Craft"
@@ -1715,8 +1743,119 @@ local function groupFor(action, index)
   }
 end
 
+-- One resale per item, from lots the crafts have not already reserved.
+-- Armor and weapons stay out: this is not a disenchant buy. A stale or
+-- external book cannot authorise the purchase.
+local function flipGroups()
+  local groups = {}
+  local LotsApi = OnyxiaGold.Lots
+  local Session = OnyxiaGold.SessionState
+  local Plan = OnyxiaGold.SessionPlan
+  local db = OnyxiaGold.Database
+  if not LotsApi or not LotsApi.FlipMargin or not Plan or not Plan.FlipSteps then
+    return groups
+  end
+  if not Session or not Session.IsActive or not Session:IsActive() then
+    return groups
+  end
+  if not db or not db.GetMarket then
+    return groups
+  end
+  local market = db:GetMarket()
+  local latest = market and market.latest
+  if type(latest) ~= "table" then
+    return groups
+  end
+  local rows = {}
+  for key, rec in pairs(latest) do
+    local itemID = tonumber(key) or tonumber(rec and rec.itemID)
+    if itemID and type(rec) == "table" and rec.source ~= "external" then
+      table.insert(rows, { itemID = itemID, rec = rec })
+    end
+  end
+  table.sort(rows, function(a, b)
+    return a.itemID < b.itemID
+  end)
+  local foundRows = {}
+  for i = 1, table.getn(rows) do
+    local itemID = rows[i].itemID
+    local rec = rows[i].rec
+    local info = OnyxiaGold.ItemInfo
+    local meta = info and info.Get and info:Get(itemID)
+    local gear = meta and info and (info:IsWeapon(meta) or info:IsArmor(meta))
+    local age = OnyxiaGold.Prices and OnyxiaGold.Prices.GetAge and OnyxiaGold.Prices:GetAge(itemID)
+    local stale = true
+    if LotsApi.IsStale then
+      stale = LotsApi.IsStale(age, OnyxiaGold.Config and OnyxiaGold.Config.QuickScanStaleSeconds)
+    end
+    local name = rec.name
+    if type(name) ~= "string" or name == "" then
+      if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+        name = OnyxiaGold.Data.GetItemName(itemID)
+      end
+    end
+    if not gear and not stale and meta and meta.vendorPrice ~= nil and type(name) == "string" and name ~= "" then
+      local book = Session:EnsureDepth(itemID)
+      local own = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
+        and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
+      local cutBPS = 500
+      if OnyxiaGold.GetAuctionHouseCutBPS then
+        cutBPS = OnyxiaGold:GetAuctionHouseCutBPS()
+      end
+      local found = LotsApi.FlipMargin({
+        levels = book.levels,
+        covered = book.covered,
+        vendorUnit = meta.vendorPrice,
+        hours = 24,
+        cutBPS = cutBPS,
+        ownMinimum = own,
+        name = name,
+        itemID = itemID,
+      })
+      if found and (tonumber(found.profit) or 0) > 0 then
+        table.insert(foundRows, found)
+      end
+    end
+  end
+  table.sort(foundRows, function(a, b)
+    if a.profit ~= b.profit then
+      return a.profit > b.profit
+    end
+    return (a.itemID or 0) < (b.itemID or 0)
+  end)
+  for i = 1, table.getn(foundRows) do
+    local found = foundRows[i]
+    local steps = Plan.FlipSteps(found, 0)
+    if steps then
+      local source = {
+        expectedProfit = found.profit,
+        state = "ACTIONABLE_NOW",
+        typeLabel = "Flip",
+        detail = "Buy the lot, then post it.",
+        confidence = 1,
+      }
+      for s = 1, table.getn(steps) do
+        steps[s].source = source
+      end
+      local buys = {}
+      buys[found.itemID] = true
+      table.insert(groups, {
+        index = 100000 + (found.itemID or i),
+        priority = 0,
+        profit = found.profit,
+        proceeds = found.proceeds,
+        steps = steps,
+        buys = buys,
+        uses = {},
+      })
+    end
+  end
+  return groups
+end
+
 -- Selected crafts become one session. Each keeps buy, then craft, then
--- post. A later sale is not cash. Previews stay after the session.
+-- post. A flip is buy, then post. A later sale is not cash. Previews stay
+-- after the session.
 function Planner:OrderSession(deployable)
   local Plan = OnyxiaGold.SessionPlan
   if not Plan or not Plan.Present or not Plan.StepsFromAction then
@@ -1728,6 +1867,11 @@ function Planner:OrderSession(deployable)
     if isSessionCraft(actions[i]) then
       table.insert(groups, groupFor(actions[i], i))
     end
+  end
+  local craftCount = table.getn(groups)
+  local flips = flipGroups()
+  for i = 1, table.getn(flips) do
+    table.insert(groups, flips[i])
   end
   if table.getn(groups) < 1 then
     local post
@@ -1785,7 +1929,7 @@ function Planner:OrderSession(deployable)
     for i = 1, table.getn(groupSteps) do
       local step = groupSteps[i]
       if step.role == "buy" then
-        need = need + (tonumber(step.cash) or 0)
+        need = need + (tonumber(step.cash) or 0) + (tonumber(step.hold) or 0)
       end
     end
     if need <= purse and table.getn(groupSteps) > 0 then
@@ -1820,10 +1964,20 @@ function Planner:OrderSession(deployable)
     seen[craft] = true
     table.insert(rows, actionFromStep(step, step.source, first))
   end
+  local posted = {}
+  for i = 1, table.getn(rows) do
+    local itemID = rows[i] and rows[i].outputItemID
+    if itemID then
+      posted[itemID] = true
+    end
+  end
   for i = 1, table.getn(actions) do
-    local kind = actions[i] and actions[i].kind
+    local action = actions[i]
+    local kind = action and action.kind
     if kind == "SKILL_PREVIEW" or kind == "GOLD_PREVIEW" then
-      table.insert(rows, actions[i])
+      table.insert(rows, action)
+    elseif craftCount < 1 and kind == "POST" and not action.flip and not posted[action.outputItemID] then
+      table.insert(rows, action)
     end
   end
   self.actions = rows

@@ -386,7 +386,11 @@ function Session:Reserve(spec)
     return false
   end
   local cash = tonumber(spec.cash) or 0
-  if cash < 0 or cash > self.cash then
+  local hold = tonumber(spec.hold) or 0
+  if hold < 0 then
+    hold = 0
+  end
+  if cash < 0 or cash + hold > self.cash then
     return false
   end
   if spec.cooldown and self.cooldowns[spec.cooldown] then
@@ -442,6 +446,10 @@ function Session:Reserve(spec)
       purchased = quote.purchasedUnits or 0
       consumed = quote.consumedUnits or 0
       excess = quote.excessUnits or 0
+      if spec.retain then
+        consumed = 0
+        excess = purchased
+      end
       selected = quote.selectedLots
       local part = quote.cashRequired or 0
       quotedCash = quotedCash + part
@@ -512,8 +520,8 @@ function Session:Reserve(spec)
       end
     end
   end
-  self.cash = self.cash - cash
-  self.spent = self.spent + cash
+  self.cash = self.cash - cash - hold
+  self.spent = self.spent + cash + hold
   local itemID = normalized[1] and normalized[1].itemID or nil
   local ownedUnits = normalized[1] and normalized[1].ownedUnits or 0
   local buyUnits = normalized[1] and normalized[1].buyUnits or 0

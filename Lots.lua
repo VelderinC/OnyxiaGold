@@ -468,6 +468,196 @@ function Lots.DisenchantExit(args)
   }
 end
 
+-- Faction auction house, 3.3.5. Twelve hours is 15% of the vendor sell
+-- value, floored, then doubled for 24 hours and quadrupled for 48.
+-- The planning floor is 1 silver. A vendor price of zero stays 1 silver.
+-- CalculateAuctionDeposit
+-- still belongs to a stack already in the post slot; this is only the
+-- copper a flip subtracts before that lot is bought.
+function Lots.DepositCopper(vendorUnit, count, hours)
+  if vendorUnit == nil then
+    return nil
+  end
+  vendorUnit = math.floor(tonumber(vendorUnit) or 0)
+  if vendorUnit < 0 then
+    vendorUnit = 0
+  end
+  count = math.floor(tonumber(count) or 0)
+  if count < 1 then
+    return nil
+  end
+  if vendorUnit == 0 then
+    return 100
+  end
+  hours = tonumber(hours) or 24
+  local scale = 2
+  if hours <= 12 then
+    scale = 1
+  elseif hours >= 48 then
+    scale = 4
+  end
+  local base = math.floor(vendorUnit * count * 15 / 100)
+  if base < 100 then
+    base = 100
+  end
+  return base * scale
+end
+
+local function percentileUnit(levels, qty)
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.PercentileFromDepth then
+    return OnyxiaGold.Prices.PercentileFromDepth(levels, qty, 0.25)
+  end
+  return nil
+end
+
+local function withoutOwn(levels)
+  local out = {}
+  for i = 1, nitems(levels) do
+    local lvl = levels[i]
+    if lvl and not lvl.own then
+      table.insert(out, {
+        p = lvl.p or lvl.unitPrice,
+        q = lvl.q or lvl.quantity,
+        n = lvl.n or lvl.auctions,
+        s = lvl.s,
+      })
+    end
+  end
+  return out
+end
+
+local function bookTotals(levels)
+  local qty = 0
+  local auctions = 0
+  for i = 1, nitems(levels) do
+    local row = levels[i]
+    qty = qty + (tonumber(row.q) or 0)
+    auctions = auctions + (tonumber(row.n) or 0)
+  end
+  return qty, auctions
+end
+
+local function remainderBook(levels, index)
+  local rest = {}
+  local qty = 0
+  local auctions = 0
+  for i = 1, nitems(levels) do
+    local row = levels[i]
+    local p = tonumber(row.p) or 0
+    local n = tonumber(row.n) or 0
+    local s = tonumber(row.s) or 0
+    local q = tonumber(row.q) or 0
+    if i == index then
+      n = n - 1
+      q = q - s
+    end
+    if p > 0 and n > 0 and s > 0 and q > 0 then
+      if q > n * s then
+        q = n * s
+      end
+      table.insert(rest, { p = p, q = q, n = n, s = s })
+      qty = qty + q
+      auctions = auctions + n
+    end
+  end
+  return rest, qty, auctions
+end
+
+-- One whole auction, resold. Not a craft and not a disenchant buy.
+-- The sale unit is the P25 of the book with that lot removed. The lot
+-- has to be under a quarter of the book, with at least two auctions left,
+-- or that one listing is the whole reason it sits under P25. Profit is
+-- that sale after the cut, minus the buyout, minus the deposit. A post
+-- under the character's own auction is not a flip. External, stale, and
+-- disenchant books return nil.
+function Lots.FlipMargin(args)
+  args = args or {}
+  if args.external or args.disenchant or args.stale then
+    return nil
+  end
+  local cutBPS = tonumber(args.cutBPS) or 500
+  if cutBPS < 0 then
+    cutBPS = 0
+  elseif cutBPS > 10000 then
+    cutBPS = 10000
+  end
+  local raw = withoutOwn(args.levels)
+  local covered = args.covered
+  if covered == nil then
+    local sum = 0
+    for i = 1, nitems(raw) do
+      sum = sum + (tonumber(raw[i].q) or 0)
+    end
+    covered = sum
+  end
+  local levels = Lots.WholeLevels(raw, covered)
+  local totalQty, totalN = bookTotals(levels)
+  if totalQty < 1 or totalN < 1 then
+    return nil
+  end
+  local own = tonumber(args.ownMinimum)
+  if own and own < 1 then
+    own = nil
+  end
+  local best
+  for i = 1, nitems(levels) do
+    local row = levels[i]
+    local unit = math.floor(tonumber(row.p) or 0)
+    local stack = math.floor(tonumber(row.s) or 0)
+    local copies = math.floor(tonumber(row.n) or 0)
+    if unit > 0 and stack > 0 and copies > 0 then
+      local rest, restQty, restN = remainderBook(levels, i)
+      local deep = stack * 4 < totalQty and restN >= 2
+      local sale = deep and percentileUnit(rest, restQty) or nil
+      sale = sale and math.floor(tonumber(sale) or 0) or nil
+      if sale and sale > 0 and unit < sale and (not own or sale >= own) then
+        local deposit = tonumber(args.deposit)
+        if deposit == nil and args.vendorUnit ~= nil then
+          deposit = Lots.DepositCopper(args.vendorUnit, stack, args.hours)
+        end
+        if deposit and deposit >= 0 then
+          deposit = math.floor(deposit)
+          local cash = unit * stack
+          local gross = sale * stack
+          local proceeds = math.floor(gross * (10000 - cutBPS) / 10000)
+          local profit = proceeds - cash - deposit
+          if profit > 0 then
+            local candidate = {
+              kind = "flip",
+              itemID = tonumber(args.itemID),
+              name = args.name,
+              unit = unit,
+              count = stack,
+              cash = cash,
+              deposit = deposit,
+              saleUnit = sale,
+              proceeds = proceeds,
+              profit = profit,
+              cutBPS = cutBPS,
+            }
+            local take = false
+            if not best or candidate.profit > best.profit then
+              take = true
+            elseif candidate.profit == best.profit and candidate.cash < best.cash then
+              take = true
+            elseif candidate.profit == best.profit and candidate.cash == best.cash and i < (best.index or 0) then
+              take = true
+            end
+            if take then
+              candidate.index = i
+              best = candidate
+            end
+          end
+        end
+      end
+    end
+  end
+  if best then
+    best.index = nil
+  end
+  return best
+end
+
 function Lots.PostEconomics(saleUnit, stack, inventoryUnit, cutBPS)
   saleUnit = tonumber(saleUnit) or 0
   stack = tonumber(stack) or 1

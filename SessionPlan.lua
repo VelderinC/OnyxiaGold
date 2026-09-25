@@ -2,7 +2,9 @@
   OnyxiaGold.SessionPlan
   One ordered session. It can hold more than one craft when they do not
   need the same gold, the same bag slots, the same auction lots, or the
-  same cooldown.
+  same cooldown. A flip is a whole-lot resale, not a craft: buy that lot,
+  then post it. It spends current gold, including the deposit, and it does
+  not take a lot a craft already reserved.
 
   Each craft stays in its own order: buy the whole lots, then craft, then
   post. A later sale is not added to the purse, so it cannot pay for a buy.
@@ -142,7 +144,7 @@ function Plan.Compose(spec)
     end
     local step = ordered[i]
     if step.role == "buy" then
-      local need = tonumber(step.cash) or 0
+      local need = (tonumber(step.cash) or 0) + (tonumber(step.hold) or 0)
       if need < 0 then
         need = 0
       end
@@ -179,6 +181,10 @@ function Plan.StepLine(step)
   elseif step.role == "craft" then
     return string.format("Craft %d %s. %d to craft.", count, name, count)
   elseif step.role == "post" then
+    local deposit = tonumber(step.deposit) or 0
+    if deposit > 0 then
+      return string.format("Post %d %s. Deposit %s.", count, name, Plan.Plain(deposit))
+    end
     return string.format("Post %d %s. %d to post.", count, name, count)
   end
   return name
@@ -196,6 +202,10 @@ function Plan.NextLine(step, profit)
   elseif step.role == "craft" then
     return string.format("Craft %d %s. %d to craft. %s", count, name, count, profitBit)
   elseif step.role == "post" then
+    local deposit = tonumber(step.deposit) or 0
+    if deposit > 0 then
+      return string.format("Post %d %s. Deposit %s. %s", count, name, Plan.Plain(deposit), profitBit)
+    end
     return string.format("Post %d %s. %d to post. %s", count, name, count, profitBit)
   end
   return nil
@@ -317,6 +327,44 @@ function Plan.StepsFromAction(action, names)
   return steps
 end
 
+function Plan.FlipSteps(found, groupId)
+  if type(found) ~= "table" then
+    return nil
+  end
+  local count = tonumber(found.count) or 0
+  local cash = tonumber(found.cash) or 0
+  local deposit = tonumber(found.deposit) or 0
+  if count < 1 or cash < 1 or deposit < 0 then
+    return nil
+  end
+  local name = found.name or "item"
+  return {
+    {
+      role = "buy",
+      flip = true,
+      craft = groupId,
+      itemID = found.itemID,
+      count = count,
+      cash = cash,
+      hold = deposit,
+      unit = found.unit,
+      name = name,
+    },
+    {
+      role = "post",
+      flip = true,
+      craft = groupId,
+      itemID = found.itemID,
+      count = count,
+      cash = 0,
+      deposit = deposit,
+      saleUnit = found.saleUnit,
+      name = name,
+      proceeds = tonumber(found.proceeds) or 0,
+    },
+  }
+end
+
 local function supplies(buyer, user)
   if not buyer or not user then
     return false
@@ -385,6 +433,7 @@ local function copyBook(book)
         q = lvl.q,
         n = lvl.n,
         s = lvl.s,
+        own = lvl.own,
       }
     end
   end
@@ -551,11 +600,79 @@ local function stepsForCraft(candidate, priced, craftId)
   return steps
 end
 
--- candidates are crafts this character can already perform. profit is the
--- sort key. net is one craft's sale after the cut and is never purse cash.
--- resources.depth is the covered buyout book. Two crafts are both kept when
--- their gold, bag slots, listings, and cooldown do not collide. A craft is
--- kept only while its own marginal profit stays positive.
+local function flipQuote(row)
+  local Lots = OnyxiaGold.Lots
+  local Book = OnyxiaGold.SessionState
+  if not Lots or not Lots.FlipMargin or not Book or type(row) ~= "table" then
+    return nil
+  end
+  local id = tonumber(row.itemID)
+  local book = id and Book.depth and Book.depth[id]
+  if not book then
+    return nil
+  end
+  return Lots.FlipMargin({
+    levels = book.levels,
+    covered = book.covered,
+    deposit = row.deposit,
+    cutBPS = row.cutBPS,
+    ownMinimum = row.ownMinimum,
+    external = row.external,
+    disenchant = row.disenchant,
+    stale = row.stale,
+    vendorUnit = row.vendorUnit,
+    hours = row.hours,
+    name = row.name,
+    itemID = id,
+  })
+end
+
+local function acceptFlip(row)
+  local Book = OnyxiaGold.SessionState
+  local found = flipQuote(row)
+  if not Book or not found or (tonumber(found.profit) or 0) <= 0 then
+    return nil
+  end
+  local quote = Book:Quote(found.itemID, found.count)
+  if not quote or not quote.complete then
+    return nil
+  end
+  local selected = quote.selectedLots or {}
+  if nitems(selected) ~= 1 then
+    return nil
+  end
+  local lot = selected[1]
+  if lot.p ~= found.unit or lot.s ~= found.count then
+    return nil
+  end
+  local cash = tonumber(quote.cashRequired) or 0
+  if cash ~= found.cash then
+    return nil
+  end
+  if cash + (tonumber(found.deposit) or 0) > (Book:RemainingCash() or 0) then
+    return nil
+  end
+  local reserved = Book:Reserve({
+    cash = cash,
+    hold = found.deposit,
+    retain = true,
+    inputs = {
+      { itemID = found.itemID, buyUnits = found.count },
+    },
+  })
+  if not reserved then
+    return nil
+  end
+  return found
+end
+
+-- candidates are crafts this character can already perform, plus flips.
+-- profit is the sort key. net is one craft's sale after the cut and is
+-- never purse cash. resources.depth is the covered buyout book. Two crafts
+-- are both kept when their gold, bag slots, listings, and cooldown do not
+-- collide. A craft is kept only while its own marginal profit stays positive.
+-- A flip is buy, then post. It spends the deposit from current gold and
+-- does not take a lot a craft already reserved.
 function Plan.Portfolio(candidates, resources)
   resources = resources or {}
   local Session = OnyxiaGold.SessionState
@@ -622,6 +739,17 @@ function Plan.Portfolio(candidates, resources)
       table.insert(indexed, { row = row, index = i })
     end
   end
+  for i = 1, nitems(indexed) do
+    local row = indexed[i].row
+    if row.kind == "flip" then
+      local found = flipQuote(row)
+      if found then
+        row.profit = found.profit
+      else
+        row.profit = 0
+      end
+    end
+  end
   table.sort(indexed, function(a, b)
     local pa = tonumber(a.row.profit) or 0
     local pb = tonumber(b.row.profit) or 0
@@ -633,6 +761,7 @@ function Plan.Portfolio(candidates, resources)
 
   local steps = {}
   local accepted = {}
+  local flips = {}
   local profit = 0
   local proceeds = 0
   for i = 1, nitems(indexed) do
@@ -640,7 +769,28 @@ function Plan.Portfolio(candidates, resources)
     local cooldown = candidate.cooldown
     local blocked = cooldown and Session:CooldownUsed(cooldown)
     local sortProfit = tonumber(candidate.profit) or 0
-    if not blocked and sortProfit > 0 then
+    if candidate.kind == "flip" then
+      if sortProfit > 0 then
+        local found = acceptFlip(candidate)
+        if found then
+          local groupId = nitems(accepted) + nitems(flips) + 1
+          local flipped = Plan.FlipSteps(found, groupId)
+          if flipped then
+            for stepIndex = 1, nitems(flipped) do
+              table.insert(steps, flipped[stepIndex])
+            end
+            table.insert(flips, {
+              name = found.name,
+              itemID = found.itemID,
+              profit = found.profit,
+              count = found.count,
+            })
+            profit = profit + found.profit
+            proceeds = proceeds + (tonumber(found.proceeds) or 0)
+          end
+        end
+      end
+    elseif not blocked and sortProfit > 0 then
       local maxCrafts = tonumber(candidate.crafts) or 1
       if maxCrafts < 1 then
         maxCrafts = 1
@@ -685,7 +835,7 @@ function Plan.Portfolio(candidates, resources)
               Session.basis[id] = left
             end
           end
-          local craftId = nitems(accepted) + 1
+          local craftId = nitems(accepted) + nitems(flips) + 1
           local crafted = stepsForCraft(candidate, kept, craftId)
           for stepIndex = 1, nitems(crafted) do
             table.insert(steps, crafted[stepIndex])
@@ -711,5 +861,6 @@ function Plan.Portfolio(candidates, resources)
     steps = steps,
   })
   plan.crafts = accepted
+  plan.flips = flips
   return plan
 end

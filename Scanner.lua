@@ -270,6 +270,15 @@ local function addRecipes(map, score)
   for i = 1, table.getn(crafts) do
     addRecipe(crafts[i])
   end
+  local Book = OnyxiaGold.RecipeBook
+  local character = OnyxiaGold.Database and OnyxiaGold.Database.GetCharacter and OnyxiaGold.Database:GetCharacter()
+  local book = character and character.recipeBook
+  if Book and Book.ItemIDs and type(book) == "table" then
+    local ids = Book.ItemIDs(book)
+    for i = 1, table.getn(ids) do
+      addID(map, ids[i], score)
+    end
+  end
 end
 
 -- Decision-critical markets. Deduped by item id. Higher score is scanned first.

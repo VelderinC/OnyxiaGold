@@ -270,6 +270,71 @@ local function restoreHeaders(collapsed)
   end
 end
 
+-- One open trade-skill row. Reagent item links and made-counts are 3.3.5
+-- APIs. A missing count is left unknown. It is not guessed.
+function Cap:ReadTradeSkillRecipe(index, profession, name, spellID)
+  local Book = OnyxiaGold.RecipeBook
+  if not Book or not Book.FromClientRow then
+    return nil
+  end
+  if profession ~= "Alchemy" and profession ~= "Enchanting" then
+    return nil
+  end
+  local reagents = {}
+  local reagentCount = 0
+  if type(GetTradeSkillNumReagents) == "function" then
+    reagentCount = tonumber(GetTradeSkillNumReagents(index)) or 0
+  end
+  for r = 1, reagentCount do
+    local reagentName, count
+    if type(GetTradeSkillReagentInfo) == "function" then
+      reagentName, _, count = GetTradeSkillReagentInfo(index, r)
+    end
+    local link
+    if type(GetTradeSkillReagentItemLink) == "function" then
+      link = GetTradeSkillReagentItemLink(index, r)
+    end
+    table.insert(reagents, {
+      name = reagentName,
+      count = count,
+      link = link,
+    })
+  end
+  local itemLink
+  if type(GetTradeSkillItemLink) == "function" then
+    itemLink = GetTradeSkillItemLink(index)
+  end
+  local outputMin, outputMax
+  if type(GetTradeSkillNumMade) == "function" then
+    local ok, minMade, maxMade = pcall(GetTradeSkillNumMade, index)
+    if ok then
+      outputMin = minMade
+      outputMax = maxMade
+    end
+  end
+  local cooldownRemaining
+  if type(GetTradeSkillCooldown) == "function" then
+    local ok, value = pcall(GetTradeSkillCooldown, index)
+    if ok and type(value) == "number" then
+      cooldownRemaining = value
+    end
+  end
+  local now = 0
+  if time then
+    now = time()
+  end
+  return Book.FromClientRow({
+    spellID = spellID,
+    name = name,
+    profession = profession,
+    reagents = reagents,
+    itemLink = itemLink,
+    outputMin = outputMin,
+    outputMax = outputMax,
+    cooldownRemaining = cooldownRemaining,
+  }, now)
+end
+
 function Cap:ScanOpenTradeSkill()
   if self.scanInProgress then
     return
@@ -305,6 +370,9 @@ function Cap:ScanOpenTradeSkill()
     row.knownRecipes = {}
   end
   local fresh = {}
+  local captured = {}
+  local capturedCount = 0
+  local deterministicCount = 0
   local found = 0
   local unlinked = 0
   local observed = {}
@@ -325,6 +393,16 @@ function Cap:ScanOpenTradeSkill()
       if spellID then
         fresh[spellID] = true
         found = found + 1
+        if key == "Alchemy" or key == "Enchanting" then
+          local recipe = self:ReadTradeSkillRecipe(i, key, name, spellID)
+          if recipe then
+            captured[spellID] = recipe
+            capturedCount = capturedCount + 1
+            if recipe.deterministic then
+              deterministicCount = deterministicCount + 1
+            end
+          end
+        end
         if canReadCooldown then
           local group = cooldownGroupForSpell(spellID)
           if group then
@@ -365,6 +443,15 @@ function Cap:ScanOpenTradeSkill()
   -- Complete scan replaces this profession. It does not append, and it does
   -- not touch any other profession's snapshot.
   row.knownRecipes[key] = fresh
+  if key == "Alchemy" or key == "Enchanting" then
+    if type(row.recipeBook) ~= "table" then
+      row.recipeBook = {}
+    end
+    row.recipeBook[key] = {
+      scannedAt = time(),
+      recipes = captured,
+    }
+  end
   if canReadCooldown and next(observed) then
     if type(row.cooldowns) ~= "table" then
       row.cooldowns = {}
@@ -411,9 +498,10 @@ function Cap:ScanOpenTradeSkill()
     self.suppressTradeUntil = GetTime() + 1.25
   end
   OnyxiaGold.Log:Debug("Capabilities", string.format(
-    "Recipe scan replaced %s rank=%s recipes=%d",
-    tostring(key), tostring(skillRank), found
+    "Recipe scan replaced %s rank=%s recipes=%d book=%d deterministic=%d",
+    tostring(key), tostring(skillRank), found, capturedCount, deterministicCount
   ))
+  return true
 end
 
 function Cap:HasProfession(name)

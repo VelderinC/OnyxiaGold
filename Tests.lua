@@ -266,6 +266,125 @@ function Tests:Run()
   local stopEarly = Lots.ShouldContinuePaging(0, 30, true)
   check("paging does not stop on one expensive page", continuePage and stopEarly and Lots.PAGE_SORT_UNVERIFIED and not incomplete)
 
+  -- 999001 is not a spell in Data/Recipes.lua. 12 units in, 1 item out.
+  -- The cheap lot is 20, so one craft leaves 8. The next 12 have to buy
+  -- the expensive lot, and that craft's own profit is not positive.
+  local Book = OnyxiaGold.RecipeBook
+  local known = Book.FromClientRow({
+    spellID = 999001,
+    name = "Fixture Elixir",
+    profession = "Alchemy",
+    reagents = { { itemID = 91001, count = 12 } },
+    outputItemID = 91002,
+    outputMin = 1,
+    outputMax = 1,
+  }, 1000)
+  local function quoteKnown(itemID, quantity)
+    return Session:Quote(itemID, quantity)
+  end
+  Session:Begin(1000000, 1000000)
+  Session.bags = {}
+  Session.depth[91001] = {
+    levels = {
+      { p = 100, q = 20, n = 1, s = 20 },
+      { p = 10000, q = 12, n = 1, s = 12 },
+    },
+    covered = 32,
+  }
+  local action = Book.Plan(known, {
+    now = 1000,
+    quote = quoteKnown,
+    saleUnit = 5000,
+    cutBPS = 500,
+    confidence = 1,
+    liquid = 1000000,
+  })
+  local reserved = false
+  local leftover = -1
+  if action and action.reserve then
+    reserved = Session:Reserve(action.reserve)
+    leftover = Session:GetBagCount(91001)
+  end
+  local net = Book.NetSale(5000, 500)
+  local score = Lots.ActionScore(action and action.expectedProfit or 0, 1, action and action.cashRequiredNow or 0, 1000000)
+  check("known recipe not in Recipes.lua", known and known.deterministic
+    and not Book.HasStaticEvaluator(999001)
+    and Book.HasStaticEvaluator(60350)
+    and action
+    and action.kind == "BUY_AND_CRAFT"
+    and action.crafts == 1
+    and action.expectedProfit == net - 1200
+    and action.expectedProfit > 0
+    and action.cashRequiredNow == 2000
+    and action.score == score
+    and action.nextMarginal ~= nil
+    and action.nextMarginal <= 0
+    and reserved
+    and leftover == 8)
+
+  Session:Begin(1000000, 1000000)
+  Session.bags = {}
+  Session.depth[91001] = {
+    levels = {
+      { p = 100, q = 20, n = 1, s = 20 },
+      { p = 10000, q = 12, n = 1, s = 12 },
+    },
+    covered = 32,
+  }
+  local quiet = Book.Plan(known, {
+    now = 1000,
+    quote = quoteKnown,
+    saleUnit = 1000,
+    cutBPS = 500,
+    confidence = 1,
+    liquid = 1000000,
+  })
+  check("next craft marginal not positive", not quiet and Book.NetSale(1000, 500) < 1200)
+
+  local spread = Book.FromClientRow({
+    spellID = 999002,
+    name = "Fixture Range",
+    profession = "Alchemy",
+    reagents = { { itemID = 91001, count = 1 } },
+    outputItemID = 91002,
+    outputMin = 1,
+    outputMax = 2,
+  }, 1000)
+  local staticRecipe = Book.FromClientRow({
+    spellID = 60350,
+    name = "Transmute: Titanium",
+    profession = "Alchemy",
+    reagents = { { itemID = 91001, count = 12 } },
+    outputItemID = 91002,
+    outputCount = 1,
+  }, 1000)
+  local staticPlan = Book.Plan(staticRecipe, {
+    now = 1000,
+    quote = quoteKnown,
+    saleUnit = 5000,
+    cutBPS = 500,
+  })
+  local waiting = Book.FromClientRow({
+    spellID = 999003,
+    name = "Fixture Cooldown",
+    profession = "Enchanting",
+    reagents = { { itemID = 91001, count = 12 } },
+    outputItemID = 91002,
+    outputCount = 1,
+    cooldownRemaining = 50,
+  }, 1000)
+  local cooling = Book.Plan(waiting, {
+    now = 1000,
+    quote = quoteKnown,
+    saleUnit = 5000,
+    cutBPS = 500,
+  })
+  check("static and uneven recipes stay off the generic edge",
+    spread and not spread.deterministic
+    and not Book.Plan(spread, { now = 1000, quote = quoteKnown, saleUnit = 5000, cutBPS = 500 })
+    and staticRecipe and not staticPlan
+    and waiting and not cooling)
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

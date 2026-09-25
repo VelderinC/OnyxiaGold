@@ -528,6 +528,23 @@ function Lots.PostPolicy(args)
   }
 end
 
+-- Rank score used by What to do now. Owned crafts weigh more than buys.
+-- A small purse shrinks a buy. The same formula prices every action.
+function Lots.ActionScore(profit, confidence, cash, liquid)
+  profit = tonumber(profit) or 0
+  confidence = tonumber(confidence) or 1
+  cash = tonumber(cash) or 0
+  liquid = tonumber(liquid) or 0
+  local score = profit * confidence
+  if cash <= 0 then
+    score = score * 2
+  end
+  if liquid > 0 and liquid < 500000 and cash > 0 then
+    score = score / (1 + cash / liquid)
+  end
+  return score
+end
+
 function Lots.AcceptQuantity(marginals, minimum)
   local kept = 0
   if type(marginals) ~= "table" then

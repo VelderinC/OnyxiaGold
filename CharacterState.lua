@@ -281,10 +281,15 @@ eventFrame:SetScript("OnUpdate", function(self, elapsed)
     if tradeElapsed >= TRADE_THROTTLE then
       tradeDirty = false
       tradeElapsed = 0
+      local replaced = false
       if OnyxiaGold.Capabilities then
-        OnyxiaGold.Capabilities:ScanOpenTradeSkill()
+        replaced = OnyxiaGold.Capabilities:ScanOpenTradeSkill() and true or false
       end
-      refreshPlannerSoon()
+      if replaced and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+        OnyxiaGold.OpportunityEngine:Refresh()
+      else
+        refreshPlannerSoon()
+      end
     end
   end
 end)

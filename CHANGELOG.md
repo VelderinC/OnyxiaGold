@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.26 — Button tooltips
+
+- Hovering Held, Collect Gold, or Factory Sweep says what that button does. The clicks themselves are unchanged.
+
 ## 0.1.25 — Sort button, window size, quality rims
 
 - The backpack Sort button sits in the title bar, just to the right of the portrait, and is shown again each time that backpack opens. One click still stacks items and packs them to the back.

@@ -385,6 +385,20 @@ function UI:Create()
     end
     OnyxiaGold.UI:ShowFactoryMail()
   end)
+  goldBtn:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Collect Gold", 1, 0.82, 0)
+    GameTooltip:AddLine("Stand at a mailbox. Each click takes one auction-house sale payment. It does not take items, personal mail, or cash-on-delivery. Click again for the next payment.", 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  goldBtn:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
+  end)
 
   local sweepBtn = CreateFrame("Button", "OnyxiaGoldFactorySweepButton", frame, "UIPanelButtonTemplate")
   sweepBtn:SetWidth(110)
@@ -396,6 +410,20 @@ function UI:Create()
       OnyxiaGold.MailProcessor:Sweep(true)
     end
     OnyxiaGold.UI:ShowFactoryMail()
+  end)
+  sweepBtn:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Factory Sweep", 1, 0.82, 0)
+    GameTooltip:AddLine("Stand at a mailbox. Each click takes the next safe auction-house mail: sale gold first, then items this list planned to buy, then other won or purchased items, then expired and cancelled auctions. It never takes personal mail, cash-on-delivery, or unknown mail. An item needs a free bag slot.", 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  sweepBtn:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 
   local heldBtn = CreateFrame("Button", "OnyxiaGoldHeldButton", frame, "UIPanelButtonTemplate")
@@ -410,6 +438,20 @@ function UI:Create()
       UI.listMode = "inventory"
     end
     UI:Refresh()
+  end)
+  heldBtn:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Held", 1, 0.82, 0)
+    GameTooltip:AddLine("Switches this list between What to do now and the items in your bags. Each held row shows what it is worth, where it sits, and a badge for what to do with it: use, disenchant, sell, vendor, or wait. Click again to return to What to do now.", 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  heldBtn:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 
   local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")

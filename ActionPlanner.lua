@@ -409,10 +409,14 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
   end
   -- Display-only. A skill preview does not reserve cash, bags, or depth,
   -- and it does not change which rows are actionable when the setting is off.
+  -- Missing profession (rank 0) is missingProfession, not missingSkill.
+  -- An unset minimum skill is never filled in.
   local skillPreview = false
   local previewProfession = nil
   local previewNeed = nil
-  if ignoreSkill and not cap.executable and cap.missingSkill and not cap.skillUnset then
+  local relaxedMissingProfession = false
+  if ignoreSkill and not cap.executable and not cap.skillUnset
+    and (cap.missingSkill or cap.missingProfession) then
     local req = opp.requirements
     local profession = req and req.profession
     local need = req and tonumber(req.minimumSkill)
@@ -422,12 +426,19 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
         relaxed[key] = value
       end
       relaxed.minimumSkill = 0
+      if cap.missingProfession then
+        relaxed.profession = nil
+        relaxed.recipeSpellID = nil
+      end
       local again = OnyxiaGold.Capabilities:CanExecute(relaxed)
       if again.executable then
         cap = again
         skillPreview = true
         previewProfession = profession
         previewNeed = need
+        if req and req.profession and not relaxed.profession then
+          relaxedMissingProfession = true
+        end
       end
     end
   end
@@ -445,6 +456,7 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
         previewNeed = need
       end
       if not cap.executable and (cap.missingProfession or cap.missingSkill) then
+        local wasMissingProfession = cap.missingProfession and true or false
         local relaxed = {}
         for key, value in pairs(req) do
           relaxed[key] = value
@@ -458,6 +470,9 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
         if again.executable then
           cap = again
           goldSkillGap = true
+          if wasMissingProfession then
+            relaxedMissingProfession = true
+          end
         end
       end
     end
@@ -607,7 +622,9 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
   end
 
   local toolState, toolReason = toolDecision(opp)
-  if toolState then
+  -- A missing Alchemy or Enchanting profession is still priced for preview.
+  -- The normal list (both flags off) still stops on the tool.
+  if toolState and not relaxedMissingProfession then
     person.state = toolState
     person.reason = toolReason
     person.capabilityAllowedCrafts = 0
@@ -887,23 +904,30 @@ end
 -- Far above the 3.3.5 gold cap, so cash is not what limits the priced quantity.
 local UNLIMITED_COPPER = 20000000000
 
-local function beyondGoldRecipe(opp)
-  if not opp or opp.actionable == false then
-    return nil
+local function isGatheringOpportunity(opp)
+  local req = opp and opp.requirements
+  local profession = type(req) == "table" and req.profession or nil
+  local factory = OnyxiaGold.Data and OnyxiaGold.Data.Factory
+  if profession and factory and factory.IsGatheringProfession and factory:IsGatheringProfession(profession) then
+    return true
+  end
+  return false
+end
+
+-- Cash-short previews include conversions that have no profession.
+-- Gathering and unset-skill recipes stay off this list.
+local function beyondGoldCandidate(opp)
+  if not opp or opp.actionable == false or opp.skillUnset then
+    return false
   end
   local req = opp.requirements
-  if type(req) ~= "table" or req.skillUnset or opp.skillUnset then
-    return nil
+  if type(req) == "table" and req.skillUnset then
+    return false
   end
-  local profession = req.profession
-  if profession ~= "Alchemy" and profession ~= "Enchanting" then
-    return nil
+  if isGatheringOpportunity(opp) then
+    return false
   end
-  local need = tonumber(req.minimumSkill)
-  if not need or need <= 0 then
-    return nil
-  end
-  return profession
+  return true
 end
 
 local function goldPreviewAction(person, deployable)
@@ -914,26 +938,42 @@ local function goldPreviewAction(person, deployable)
   if shortfall < 0 then
     shortfall = 0
   end
-  local goldLabel = string.format(
-    "Needs %s more. Cash required %s.",
-    OnyxiaGold.FormatGoldShort(shortfall),
-    OnyxiaGold.FormatGoldShort(cash)
-  )
-  action.kind = "GOLD_PREVIEW"
-  action.actionable = false
-  action.goldLabel = goldLabel
-  action.name = goldLabel
-  action.state = "GOLD_PREVIEW"
-  action.detail = goldLabel .. " Not a buy."
-  action.skillLabel = nil
+  local skillLabel = nil
   if person.goldSkillGap then
-    local profession = person.previewProfession or "Profession"
-    local need = tonumber(person.previewNeed) or 0
-    action.skillLabel = string.format("Needs %s %d.", profession, need)
-    action.name = goldLabel .. " " .. action.skillLabel
-    action.detail = action.name .. " Not a buy."
+    local profession = person.previewProfession
+    local need = tonumber(person.previewNeed)
+    if profession and need and need > 0 then
+      skillLabel = string.format("Needs %s %d.", profession, need)
+    end
   end
-  return action
+  action.actionable = false
+  action.skillLabel = skillLabel
+  if shortfall > 0 then
+    local goldLabel = string.format(
+      "Needs %s more. Cash required %s.",
+      OnyxiaGold.FormatGoldShort(shortfall),
+      OnyxiaGold.FormatGoldShort(cash)
+    )
+    action.kind = "GOLD_PREVIEW"
+    action.goldLabel = goldLabel
+    action.state = "GOLD_PREVIEW"
+    if skillLabel then
+      action.name = goldLabel .. " " .. skillLabel
+    else
+      action.name = goldLabel
+    end
+    action.detail = action.name .. " Not a buy."
+    return action
+  end
+  if skillLabel then
+    action.kind = "SKILL_PREVIEW"
+    action.goldLabel = nil
+    action.name = skillLabel
+    action.state = "SKILL_PREVIEW"
+    action.detail = skillLabel .. " Not a buy."
+    return action
+  end
+  return nil
 end
 
 function Planner:ShowAboveSkill()
@@ -1042,18 +1082,20 @@ function Planner:Refresh()
   end
 
   -- Priced on the fresh book, then left out of the greedy selection.
-  -- Not reserved and not buys. Skill does not filter this list.
+  -- Not reserved and not buys. "On the normal list" is the unrelaxed pass.
+  -- A beyondGold pass already ignores profession and skill, so it cannot
+  -- decide whether the real list would have kept the row.
   local goldPeople = {}
   if self:ShowBeyondGold() then
     for i = 1, table.getn(opps) do
       local opp = opps[i]
-      if beyondGoldRecipe(opp) then
-        local real = self:Personalize(opp, deployable, afterMailBudget(deployable), false, true)
-        local canPay = real.state == "ACTIONABLE_NOW" and (real.sensibleCrafts or 0) > 0
-        if not canPay then
+      if beyondGoldCandidate(opp) then
+        local normal = self:Personalize(opp, deployable, afterMailBudget(deployable), false, false)
+        local onNormalList = normal.state == "ACTIONABLE_NOW" and (normal.sensibleCrafts or 0) > 0
+        if not onNormalList then
           local priced = self:Personalize(opp, UNLIMITED_COPPER, UNLIMITED_COPPER, false, true)
-          local cash = priced.cashRequiredNow or 0
-          if priced.state == "ACTIONABLE_NOW" and (priced.sensibleCrafts or 0) > 0 and cash > deployable then
+          local hasCrafts = priced.state == "ACTIONABLE_NOW" and (priced.sensibleCrafts or 0) > 0
+          if hasCrafts and not onNormalList then
             table.insert(goldPeople, priced)
           end
         end
@@ -1268,7 +1310,11 @@ function Planner:Refresh()
     for i = 1, table.getn(goldPeople) do
       local person = goldPeople[i]
       if not listed[person.opp] then
-        table.insert(self.actions, goldPreviewAction(person, deployable))
+        local action = goldPreviewAction(person, deployable)
+        if action and (action.kind == "GOLD_PREVIEW" or action.kind == "SKILL_PREVIEW") then
+          table.insert(self.actions, action)
+          listed[person.opp] = true
+        end
       end
     end
   end

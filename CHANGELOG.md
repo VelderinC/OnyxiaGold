@@ -16,6 +16,9 @@ Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials
 - Dream Shard combines one way: 3 Small Dream Shards into 1 Dream Shard. The addon does not recommend a split.
 - Prismatic shards stay a priced pair. They are not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented.
 - Epic gem transmutes share one `transmute_20h` cooldown per plan. Earthsiege and Skyflare are multi-input and are not on that cooldown. Cardinal Ruby is not an action because its minimum skill is unset. Philosopher's Stone is a tool, not a reagent. Transmute Master stays the 1.20 expectation only on transmutes that support it.
+- The live auction page for the next buy is marked with a stop, the units that still fit, and the gold lost if that auction is over the stop. A one-unit scrap that cannot fill the recipe is marked scrap. The post box is filled at or above the floor. Querying stops when the visible page is entirely over the stop. He presses Blizzard's button.
+- The output cap's room is the visible book minus bags, bank, mail items, and his own listings. Partial or stale snapshots stay marked and still count. If he already holds at least that book, the row says post or hold. Stock is a count, not an asking price.
+- A transmute needs Philosopher's Stone (item 9149) in bags or equipped. Later stones stay "tool not confirmed". A rod in the bank is a withdraw line, not a finished craft. Buy quantity stops at free bag slots. Equipped gear is not a disenchant or vendor row. Tools are not consumed in the profit math.
 
 ## 0.1.2 — Character State & Capital Awareness
 

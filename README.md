@@ -157,7 +157,7 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Item-use; no profession |
 | 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Priced only. Not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented |
 | 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
-| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone is a tool, not a reagent |
+| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone (item 9149) must be in bags or equipped. It is not consumed |
 | Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |
 | Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown |
 | Epic gems (Ametrine, King's Amber, Dreadstone, Majestic Zircon, Eye of Zul) | Alchemy 450. One shared 20-hour transmute per plan |
@@ -176,7 +176,8 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - Owner-auction snapshot does not page. If `shown < total`, Listed is approximate (`complete = false`)
 - If the mailbox has not loaded every message, Mail Ready and Pending are approximate (`snapshotComplete = false`)
 - Known recipes are replaced per profession on a complete tradeskill scan. They are not appended forever
-- `sensibleCrafts` is a crude cap against the visible output book, not a liquidity model or a sale rate
+- `sensibleCrafts` is a crude cap against the visible output book after stock he already holds, not a liquidity model or a sale rate. Partial and stale snapshots still count
+- A buy stops at free general bag slots. The auction page shows the stop and does not buy, bid, or post for him
 - Bank counts are last-open snapshots
 - Recipe knowledge is only as current as the last tradeskill window scan
 - No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)

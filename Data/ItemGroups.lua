@@ -34,8 +34,18 @@ local Items = {
   TITANIUM_BAR = { id = 41163, name = "Titanium Bar" },
 
   -- Alchemy transmute reagents and outputs. Names only; prices come from the scan.
-  -- Philosopher's Stone is a tool, not an input.
+  -- Philosopher's Stone is a tool, not an input. Later stones are named only.
+  -- Their tool-category membership is unset, so they are not valid transmute tools yet.
   PHILOSOPHERS_STONE = { id = 9149, name = "Philosopher's Stone" },
+  ALCHEMISTS_STONE = { id = 35748, name = "Alchemist's Stone" },
+  ASSASSINS_ALCHEMIST_STONE = { id = 35749, name = "Assassin's Alchemist Stone" },
+  GUARDIANS_ALCHEMIST_STONE = { id = 35750, name = "Guardian's Alchemist Stone" },
+  REDEEMERS_ALCHEMIST_STONE = { id = 35751, name = "Redeemer's Alchemist Stone" },
+  MIGHTY_ALCHEMISTS_STONE = { id = 44322, name = "Mighty Alchemist's Stone" },
+  INDESTRUCTIBLE_ALCHEMISTS_STONE = { id = 44323, name = "Indestructible Alchemist's Stone" },
+  MERCURIAL_STONE = { id = 31080, name = "Mercurial Stone" },
+  RUNED_FEL_IRON_ROD = { id = 22461, name = "Runed Fel Iron Rod" },
+  RUNED_ETERNIUM_ROD = { id = 22463, name = "Runed Eternium Rod" },
   DARK_JADE = { id = 36932, name = "Dark Jade" },
   HUGE_CITRINE = { id = 36929, name = "Huge Citrine" },
   ETERNAL_FIRE = { id = 36860, name = "Eternal Fire" },

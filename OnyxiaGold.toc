@@ -29,8 +29,10 @@ Capital.lua
 Inventory.lua
 Mail.lua
 OwnedAuctions.lua
+Stock.lua
 Capabilities.lua
 OpportunityEngine.lua
 SessionState.lua
 ActionPlanner.lua
+AuctionStop.lua
 UI.lua

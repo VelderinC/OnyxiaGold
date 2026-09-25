@@ -77,6 +77,9 @@ function State:OnLogin()
   end
   if OnyxiaGold.Inventory then
     OnyxiaGold.Inventory:ScanBags()
+    if OnyxiaGold.Inventory.ScanEquipment then
+      OnyxiaGold.Inventory:ScanEquipment()
+    end
   end
   if OnyxiaGold.Capabilities then
     OnyxiaGold.Capabilities:ScanProfessions()
@@ -111,6 +114,9 @@ function State:OnEvent(event, arg1)
     end
     if OnyxiaGold.Inventory then
       OnyxiaGold.Inventory:ScanBags()
+      if OnyxiaGold.Inventory.ScanEquipment then
+        OnyxiaGold.Inventory:ScanEquipment()
+      end
     end
     if OnyxiaGold.Capabilities then
       OnyxiaGold.Capabilities:ScanProfessions()

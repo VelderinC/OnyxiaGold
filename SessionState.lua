@@ -29,6 +29,7 @@ function Session:Reset()
   self.reserved = {}
   self.cooldowns = {}
   self.outputUsed = {}
+  self.bagSlotsUsed = 0
 end
 
 Session:Reset()
@@ -114,6 +115,10 @@ function Session:AfterMailCash()
     left = 0
   end
   return left
+end
+
+function Session:BagSlotsUsed()
+  return self.bagSlotsUsed or 0
 end
 
 function Session:GetBagCount(itemID)
@@ -372,6 +377,10 @@ function Session:Reserve(spec)
   if outputID and outputUnits > 0 then
     self.outputUsed[outputID] = (self.outputUsed[outputID] or 0) + outputUnits
   end
+  local bagSlots = tonumber(spec.bagSlots) or 0
+  if bagSlots > 0 then
+    self.bagSlotsUsed = (self.bagSlotsUsed or 0) + bagSlots
+  end
   table.insert(self.reserved, {
     itemID = itemID,
     cash = cash,
@@ -381,6 +390,7 @@ function Session:Reserve(spec)
     cooldown = spec.cooldown,
     outputItemID = outputID,
     outputUnits = outputUnits,
+    bagSlots = bagSlots,
   })
   if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
     OnyxiaGold.Log:Debug("Session", string.format(

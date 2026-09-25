@@ -18,8 +18,10 @@
     marketProfitableCrafts, physicalPossibleCrafts, affordableCrafts,
     capabilityAllowedCrafts, executableCrafts, sensibleCrafts.
   sensibleCrafts is a crude output cap: do not plan more output units than
-  the visible buyout book already shows. It is not a liquidity model and
-  it is not a sale rate.
+  the visible buyout book still has room for after bags, bank, mail items,
+  and his own listings. It is not a liquidity model and it is not a sale rate.
+  Held stock is a count, not an asking price. A transmute needs its tool on
+  him. A buy stops at free bag slots.
 
   Candidate classes (ranking remains data-driven, not a hard Alchemy > Enchanting order):
   zero-cash owned transforms, high-EV Alchemy, Enchanting destruction (v0.2.0),
@@ -106,30 +108,123 @@ local function outputPerCraft(opp)
   return count * expected
 end
 
--- Returns the craft count that still fits the visible output book, and whether it was cut.
-local function cappedCrafts(opp, executable)
-  executable = tonumber(executable) or 0
-  local outID = opp.outputItemIDs and opp.outputItemIDs[1]
-  if not outID or executable <= 0 then
-    return executable, false
+local LATER_STONE_KEYS = {
+  "ALCHEMISTS_STONE",
+  "ASSASSINS_ALCHEMIST_STONE",
+  "GUARDIANS_ALCHEMIST_STONE",
+  "REDEEMERS_ALCHEMIST_STONE",
+  "MIGHTY_ALCHEMISTS_STONE",
+  "INDESTRUCTIBLE_ALCHEMISTS_STONE",
+}
+
+local function itemDefID(key)
+  local items = OnyxiaGold.Data and OnyxiaGold.Data.Items
+  local def = items and items[key]
+  return def and def.id or nil
+end
+
+local function isLaterStone(itemID)
+  itemID = tonumber(itemID)
+  if not itemID then
+    return false
   end
-  local visible = tonumber(opp.outputMarketQuantity) or 0
+  for i = 1, table.getn(LATER_STONE_KEYS) do
+    if itemDefID(LATER_STONE_KEYS[i]) == itemID then
+      return true
+    end
+  end
+  return false
+end
+
+-- listed, held, room left after stock and after output already planned.
+local function outputSnapshot(opp)
+  local outID = opp.outputItemIDs and opp.outputItemIDs[1]
+  if not outID then
+    return nil
+  end
+  local listed = tonumber(opp.outputMarketQuantity) or 0
+  local held = 0
+  local partial = false
+  local stale = false
+  if OnyxiaGold.Stock and OnyxiaGold.Stock.Describe then
+    local stock = OnyxiaGold.Stock:Describe(outID)
+    held = tonumber(stock.total) or 0
+    partial = stock.partial and true or false
+    stale = stock.stale and true or false
+  end
+  local room = listed - held
+  if room < 0 then
+    room = 0
+  end
   local session = OnyxiaGold.SessionState
   if session and session.IsActive and session:IsActive() and session.RemainingOutput then
-    visible = session:RemainingOutput(outID, visible)
+    room = session:RemainingOutput(outID, room)
+  end
+  if room < 0 then
+    room = 0
+  end
+  return {
+    listed = listed,
+    held = held,
+    room = room,
+    partial = partial,
+    stale = stale,
+    overHeld = held > 0 and held >= listed,
+  }
+end
+
+local function paintStock(person, opp, snap, crafts)
+  if not snap then
+    return
+  end
+  person.outputListed = snap.listed
+  person.outputHeld = snap.held
+  person.outputRoom = snap.room
+  person.outputHeldPartial = snap.partial
+  person.outputHeldStale = snap.stale
+  person.outputStillMake = (tonumber(crafts) or 0) * outputPerCraft(opp)
+  local flags = {}
+  if snap.partial then
+    table.insert(flags, "partial")
+  end
+  if snap.stale then
+    table.insert(flags, "stale")
+  end
+  local flag = ""
+  if table.getn(flags) > 0 then
+    flag = " (" .. table.concat(flags, ", ") .. ")"
+  end
+  person.outputStockLine = string.format(
+    "Listed %d · already yours %d%s · still make %d",
+    snap.listed, snap.held, flag, person.outputStillMake
+  )
+  if snap.held > 0 then
+    person.outputHeldNote = "Held stock is a count, not an asking price."
+  end
+end
+
+-- Returns craft count, whether the book cut it, whether he should post or hold, and the snapshot.
+local function cappedCrafts(opp, executable)
+  executable = tonumber(executable) or 0
+  local snap = outputSnapshot(opp)
+  if not snap or executable <= 0 then
+    return executable, false, false, snap
   end
   local per = outputPerCraft(opp)
-  if executable * per <= visible then
-    return executable, false
+  if snap.overHeld then
+    return 0, true, true, snap
   end
-  local allowed = math.floor(visible / per)
+  if executable * per <= snap.room then
+    return executable, false, false, snap
+  end
+  local allowed = math.floor(snap.room / per)
   if allowed < 0 then
     allowed = 0
   end
   if allowed > executable then
     allowed = executable
   end
-  return allowed, true
+  return allowed, true, false, snap
 end
 
 -- lines, cash, economicInput, ownedValue, complete
@@ -197,6 +292,82 @@ local function craftCost(opp, crafts, owned)
     return nil, nil, nil, false
   end
   return cash, economic, ownedValue, complete
+end
+
+-- slots needed, free slots left. Nil slots means the limit is unknown.
+local function bagSlotsFor(lines)
+  local inv = OnyxiaGold.Inventory
+  if not inv or not inv.GetFreeGeneralSlots then
+    return nil, nil
+  end
+  local free = inv:GetFreeGeneralSlots()
+  if free == nil then
+    return nil, nil
+  end
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() and session.BagSlotsUsed then
+    free = free - (session:BagSlotsUsed() or 0)
+    if free < 0 then
+      free = 0
+    end
+  end
+  local slots = 0
+  for i = 1, table.getn(lines or {}) do
+    local line = lines[i]
+    local stack = inv.GetStackSize and inv:GetStackSize(line.itemID) or nil
+    if not stack or stack < 1 then
+      return nil, free
+    end
+    local partial = inv.GetPartialRoom and inv:GetPartialRoom(line.itemID) or 0
+    local spill = (line.buyUnits or 0) - partial
+    if spill < 0 then
+      spill = 0
+    end
+    slots = slots + math.floor((spill + stack - 1) / stack)
+  end
+  return slots, free
+end
+
+-- true/false if priced, nil if the quote is incomplete.
+local function bagFit(opp, n)
+  local lines = planInputs(opp, n)
+  if not lines then
+    return nil, 0
+  end
+  local slots, free = bagSlotsFor(lines)
+  if slots == nil then
+    return true, 0
+  end
+  return slots <= free, slots
+end
+
+local function toolDecision(opp)
+  local req = opp.requirements
+  local toolID = req and tonumber(req.toolItemID)
+  if not toolID then
+    return nil
+  end
+  local name = req.tool or "tool"
+  if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+    name = OnyxiaGold.Data.GetItemName(toolID) or name
+  end
+  if isLaterStone(toolID) or toolID == itemDefID("MERCURIAL_STONE") then
+    return "TOOL_NOT_CONFIRMED", "Tool not confirmed", name
+  end
+  local inv = OnyxiaGold.Inventory
+  local onPerson = inv and inv.GetOnPersonCount and (inv:GetOnPersonCount(toolID) or 0) > 0
+  local inBank = inv and inv.GetBankCount and (inv:GetBankCount(toolID) or 0) > 0
+  if toolID == itemDefID("PHILOSOPHERS_STONE") and not onPerson
+    and inv and inv.UnconfirmedStoneOnPerson and inv:UnconfirmedStoneOnPerson() then
+    return "TOOL_NOT_CONFIRMED", "Tool not confirmed", name
+  end
+  if onPerson then
+    return nil
+  end
+  if inBank then
+    return "WITHDRAW_TOOL", "Withdraw " .. name, name
+  end
+  return "TOOL_MISSING", name .. " is not in bags or equipped", name
 end
 
 local function maxCraftsForCash(opp, owned, deployable, capMax)
@@ -373,6 +544,16 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     return person
   end
 
+  local toolState, toolReason = toolDecision(opp)
+  if toolState then
+    person.state = toolState
+    person.reason = toolReason
+    person.capabilityAllowedCrafts = 0
+    person.executableCrafts = 0
+    person.sensibleCrafts = 0
+    return person
+  end
+
   if physical <= 0 then
     person.state = "UNPROFITABLE"
     person.reason = "Not profitable"
@@ -395,19 +576,61 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
       n = n - 1
     end
     if chosen then
-      local sensible, capped = cappedCrafts(opp, chosen)
-      if sensible >= 1 and accept(sensible) then
+      local sensible, capped, hold, snap = cappedCrafts(opp, chosen)
+      if hold then
         person.executableCrafts = chosen
+        person.sensibleCrafts = 0
+        person.outputCapped = true
+        person.outputCapNote = OUTPUT_CAP_NOTE
+        person.state = "POST_OR_HOLD"
+        person.reason = "Post or hold"
+        paintStock(person, opp, snap, 0)
+        return person
+      end
+      local fitted = sensible
+      local bagLimited = false
+      local priced = true
+      if sensible >= 1 then
+        local fit, _ = bagFit(opp, sensible)
+        if fit == nil then
+          priced = false
+        elseif not fit then
+          bagLimited = true
+          local lo = 0
+          local hi = sensible - 1
+          while lo < hi do
+            local mid = math.floor((lo + hi + 1) / 2)
+            local ok = bagFit(opp, mid)
+            if ok then
+              lo = mid
+            else
+              hi = mid - 1
+            end
+          end
+          fitted = lo
+        end
+      end
+      if priced and fitted >= 1 and accept(fitted) then
+        person.executableCrafts = chosen
+        person.bagLimited = bagLimited
+        local _, slots = bagFit(opp, fitted)
+        person.bagSlotsUsed = slots or 0
         if capped then
           person.outputCapped = true
           person.outputCapNote = OUTPUT_CAP_NOTE
         end
+        paintStock(person, opp, snap, fitted)
         person.state = "ACTIONABLE_NOW"
         return person
       end
       person.executableCrafts = chosen
       person.sensibleCrafts = 0
-      if capped then
+      paintStock(person, opp, snap, 0)
+      if bagLimited and fitted < 1 then
+        person.bagLimited = true
+        person.state = "BAG_FULL"
+        person.reason = "Not enough free bag slots"
+      elseif capped then
         person.outputCapped = true
         person.outputCapNote = OUTPUT_CAP_NOTE
         person.state = "OUTPUT_CAPPED"
@@ -577,6 +800,7 @@ function Planner:ReserveSelected(person)
     cooldown = cooldown,
     outputItemID = outputID,
     outputUnits = outputUnits,
+    bagSlots = person.bagSlotsUsed or 0,
   })
 end
 
@@ -680,7 +904,12 @@ function Planner:Refresh()
         or person.state == "UNPROFITABLE"
         or person.state == "COOLDOWN_RESERVED"
         or person.state == "OUTPUT_CAPPED"
-        or person.state == "NOT_ACTIONABLE" then
+        or person.state == "NOT_ACTIONABLE"
+        or person.state == "POST_OR_HOLD"
+        or person.state == "WITHDRAW_TOOL"
+        or person.state == "TOOL_NOT_CONFIRMED"
+        or person.state == "TOOL_MISSING"
+        or person.state == "BAG_FULL" then
         table.insert(self.locked, person)
       end
     end
@@ -694,6 +923,54 @@ function Planner:Refresh()
       return "~" .. text .. "+"
     end
     return text
+  end
+
+  local front = {}
+  for i = 1, table.getn(self.locked) do
+    local person = self.locked[i]
+    local opp = person.opp or {}
+    if person.state == "WITHDRAW_TOOL" then
+      table.insert(front, {
+        kind = "WITHDRAW",
+        name = person.reason or "Withdraw tool",
+        typeLabel = opp.typeLabel or opp.type,
+        expectedProfit = 0,
+        cashRequiredNow = 0,
+        crafts = 0,
+        state = "ACTIONABLE_NOW",
+        detail = "Withdraw this before the craft",
+        person = person,
+        sourceOpp = opp,
+      })
+      table.insert(front, {
+        kind = "CRAFT",
+        name = opp.name or "Craft",
+        typeLabel = opp.typeLabel or opp.type,
+        expectedProfit = 0,
+        cashRequiredNow = 0,
+        crafts = 0,
+        state = "NEEDS_WITHDRAW",
+        detail = "Not ready until the tool is in bags or equipped",
+        person = person,
+        sourceOpp = opp,
+      })
+    elseif person.state == "POST_OR_HOLD" then
+      table.insert(self.actions, {
+        kind = "POST_OR_HOLD",
+        name = "Post or hold: " .. tostring(opp.name or "output"),
+        typeLabel = opp.typeLabel or opp.type,
+        expectedProfit = 0,
+        cashRequiredNow = 0,
+        crafts = 0,
+        state = "POST_OR_HOLD",
+        detail = "Post or hold",
+        person = person,
+        sourceOpp = opp,
+      })
+    end
+  end
+  for i = table.getn(front), 1, -1 do
+    table.insert(self.actions, 1, front[i])
   end
 
   if claimable > 0 and unlockedByMail > 0 then
@@ -730,6 +1007,10 @@ function Planner:Refresh()
       claimable = claimable,
       mailPartial = mailPartial and true or false,
     })
+  end
+
+  for i = 1, table.getn(self.actions) do
+    self.actions[i].index = i
   end
 
   self.session = {

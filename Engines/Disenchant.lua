@@ -3,7 +3,9 @@
 
   Priority: v0.2.0, after 0.1.1 market data, 0.1.2 character state, 0.1.3 planner.
 
+  Equipped gear is never a disenchant row and never a vendor row.
   Do not implement a crude "green → average dust" model.
+  Do not add disenchant buys in this slice.
   Full Scan of green/blue/purple equipment is the intended discovery feed.
   Quick Scan remains for commodities.
 

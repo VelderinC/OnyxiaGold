@@ -70,13 +70,19 @@ OnyxiaGold.Data.Conversions = {
     targetItemID = I.LARGE_PRISMATIC_SHARD.id,
     targetCount = 1,
     reversible = true,
-    -- Both directions stay priced. Neither is an action until the Enchanting
-    -- spell and the Runed Fel Iron Rod are represented.
+    -- Both directions stay priced. The rod is recorded. The Enchanting spell
+    -- is not an action in this slice, so neither direction is a craft row.
     actionable = false,
+    requirements = {
+      profession = "Enchanting",
+      tool = "Runed Fel Iron Rod",
+      toolItemID = I.RUNED_FEL_IRON_ROD.id,
+      toolConsumed = false,
+    },
     nameForward = "Small Prismatic → Large Prismatic",
     nameReverse = "Large Prismatic → Small Prismatic",
-    notesForward = "Market relationship only. Enchanting recipe; needs a Runed Fel Iron Rod. Not an action until that recipe and the rod are represented.",
-    notesReverse = "Market relationship only. Enchanting recipe; needs a Runed Fel Iron Rod. Not an action until that recipe and the rod are represented.",
+    notesForward = "Market relationship only. Runed Fel Iron Rod is required on the character. Not an action until the Enchanting recipe is added.",
+    notesReverse = "Market relationship only. Runed Fel Iron Rod is required on the character. Not an action until the Enchanting recipe is added.",
   },
   {
     id = "small_dream_to_dream",
@@ -92,9 +98,9 @@ OnyxiaGold.Data.Conversions = {
   },
 }
 
--- Philosopher's Stone is a tool on every transmute. It is not consumed, and it is
--- not an input. Other stones may satisfy the tool category; that membership is
--- unset, so the planner does not require item 9149 to be in the bags.
+-- Philosopher's Stone (item 9149) is a tool on every transmute. It is not
+-- consumed and it is not an input. The planner requires it in bags or equipped.
+-- Later stones stay unconfirmed until one transmute with that item is recorded.
 local function alchemyTool(requirements)
   requirements.profession = "Alchemy"
   requirements.tool = "Philosopher's Stone"

@@ -436,6 +436,41 @@ function UI:ShowCapitalTooltip(owner)
   GameTooltip:Show()
 end
 
+function UI:PaintAuctionPage(page)
+  local rows = page and page.rows or {}
+  local offset = 0
+  if type(FauxScrollFrame_GetOffset) == "function" and BrowseScrollFrame then
+    offset = tonumber(FauxScrollFrame_GetOffset(BrowseScrollFrame)) or 0
+  end
+  local shown = NUM_BROWSE_TO_DISPLAY or 8
+  for i = 1, shown do
+    local button = _G["BrowseButton" .. i]
+    local row = rows[i + offset]
+    if button then
+      if not button.ogStopLine and button.CreateFontString then
+        button.ogStopLine = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      end
+      if button.ogStopLine and button.ogStopLine.SetText then
+        button.ogStopLine:SetText(row and row.line or "")
+      end
+    end
+  end
+end
+
+function UI:ApplyPostPrice(copper)
+  copper = tonumber(copper) or 0
+  if copper <= 0 or not BuyoutPrice then
+    return
+  end
+  if type(MoneyInputFrame_GetCopper) ~= "function" or type(MoneyInputFrame_SetCopper) ~= "function" then
+    return
+  end
+  local current = tonumber(MoneyInputFrame_GetCopper(BuyoutPrice)) or 0
+  if current < copper then
+    MoneyInputFrame_SetCopper(BuyoutPrice, copper)
+  end
+end
+
 function UI:ShowActionTooltip(row)
   local action = row and row.action
   if not action then
@@ -474,6 +509,12 @@ function UI:ShowActionTooltip(row)
     ), 0.75, 0.75, 0.75)
     if person.outputCapNote then
       GameTooltip:AddLine(person.outputCapNote, 1, 0.82, 0.4, 1)
+    end
+    if person.outputStockLine then
+      GameTooltip:AddLine(person.outputStockLine, 0.85, 0.85, 0.85, 1)
+    end
+    if person.outputHeldNote then
+      GameTooltip:AddLine(person.outputHeldNote, 0.85, 0.85, 0.85, 1)
     end
   end
   if opp then

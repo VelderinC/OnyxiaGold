@@ -180,6 +180,9 @@ function DB:EmptyCharacter()
       liquid = 0,
       timestamp = nil,
     },
+    -- Real buys and sales only. Scans and expected profit are not trades.
+    trades = {},
+    tradeMailSeen = {},
     stateTimestamps = {},
   }
 end
@@ -222,6 +225,12 @@ function DB:EnsureCharacterShape(rec)
   end
   rec.capital = type(rec.capital) == "table" and rec.capital or empty.capital
   rec.stateTimestamps = type(rec.stateTimestamps) == "table" and rec.stateTimestamps or {}
+  if type(rec.trades) ~= "table" then
+    rec.trades = {}
+  end
+  if type(rec.tradeMailSeen) ~= "table" then
+    rec.tradeMailSeen = {}
+  end
   return rec
 end
 

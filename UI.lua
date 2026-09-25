@@ -10,11 +10,12 @@ OnyxiaGold.UI = OnyxiaGold.UI or {}
 local UI = OnyxiaGold.UI
 
 local FRAME_WIDTH = 1080
-local FRAME_HEIGHT = 760
+local FRAME_HEIGHT = 884
 local NUM_ROWS = 8
 local ROW_HEIGHT = 58
 local HEADER_Y = -188
 local LIST_TOP = HEADER_Y - 28
+local LIST_BOTTOM = 204
 local COL_GAP = 16
 
 local COLS = {
@@ -67,6 +68,18 @@ local function actionInstruction(action)
     pronoun = "it"
   end
   return string.format("%s, convert into %d %s, then post %s.", buy, units, outName, pronoun)
+end
+
+-- Convert decision only. The profit breakdown stays on the row and is not a trade.
+function UI:ActionNote(action)
+  local text = actionInstruction(action)
+  if type(text) ~= "string" or text == "" then
+    return nil
+  end
+  if string.sub(text, -1) == "." then
+    text = string.sub(text, 1, -2)
+  end
+  return text
 end
 
 local function formatCount(n)
@@ -437,7 +450,7 @@ function UI:Create()
 
   local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", frame, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, LIST_TOP)
-  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 58)
+  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, LIST_BOTTOM)
   scroll.offset = 0
   scroll:EnableMouseWheel(1)
   scroll:SetScript("OnVerticalScroll", function(self, value)
@@ -474,6 +487,9 @@ function UI:Create()
   end)
   frame:EnableMouseWheel(1)
   frame:SetScript("OnMouseWheel", function(_, delta)
+    if UI.tradeScroll and MouseIsOver and MouseIsOver(UI.tradeScroll) then
+      return
+    end
     local handler = scroll:GetScript("OnMouseWheel")
     if handler then
       handler(scroll, delta)
@@ -574,6 +590,77 @@ function UI:Create()
   scanBarText:SetText("")
   scanBar:Hide()
 
+  local tradeTitle = addLabel(frame, "Trades", "GameFontNormalSmall")
+  tradeTitle:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 182)
+  setRGB(tradeTitle, 1, 0.82, 0)
+
+  local tradeCopy = CreateFrame("Button", "OnyxiaGoldTradeCopyButton", frame, "UIPanelButtonTemplate")
+  tradeCopy:SetWidth(56)
+  tradeCopy:SetHeight(20)
+  tradeCopy:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 178)
+  tradeCopy:SetText("Copy")
+  tradeCopy:SetScript("OnClick", function()
+    UI:CopyTrades()
+  end)
+  tradeCopy:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Select the trade lines, then Ctrl+C", 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  tradeCopy:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+
+  local tradeTotals = addLabel(frame, "", "GameFontHighlightSmall")
+  tradeTotals:SetPoint("LEFT", tradeTitle, "RIGHT", 12, 0)
+  tradeTotals:SetPoint("RIGHT", tradeCopy, "LEFT", -12, 0)
+  tradeTotals:SetJustifyH("LEFT")
+  tradeTotals:SetWordWrap(false)
+
+  local tradeScroll = CreateFrame("ScrollFrame", "OnyxiaGoldTradeScroll", frame, "UIPanelScrollFrameTemplate")
+  tradeScroll:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 56)
+  tradeScroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 56)
+  tradeScroll:SetHeight(118)
+  tradeScroll:EnableMouseWheel(1)
+  tradeScroll:SetScript("OnMouseWheel", function(self, delta)
+    local bar = getglobal(self:GetName() .. "ScrollBar")
+    if not bar then
+      return
+    end
+    local step = 28
+    local value = bar:GetValue() or 0
+    if delta > 0 then
+      value = value - step
+    else
+      value = value + step
+    end
+    local minV, maxV = bar:GetMinMaxValues()
+    if value < (minV or 0) then
+      value = minV or 0
+    end
+    if value > (maxV or 0) then
+      value = maxV or 0
+    end
+    bar:SetValue(value)
+  end)
+
+  local tradeEdit = CreateFrame("EditBox", "OnyxiaGoldTradeEdit", tradeScroll)
+  tradeEdit:SetMultiLine(true)
+  tradeEdit:SetAutoFocus(false)
+  tradeEdit:SetFontObject(GameFontHighlightSmall)
+  tradeEdit:SetWidth(960)
+  tradeEdit:SetHeight(118)
+  tradeEdit:SetMaxLetters(999999)
+  tradeEdit:SetScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+  end)
+  tradeEdit:SetScript("OnTextChanged", function(self)
+    if self.freeze and self.frozenText and self:GetText() ~= self.frozenText then
+      self:SetText(self.frozenText)
+    end
+  end)
+  tradeScroll:SetScrollChild(tradeEdit)
+
   self.frame = frame
   self.quickScanButton = quickBtn
   self.fullScanButton = fullBtn
@@ -592,6 +679,9 @@ function UI:Create()
   self.status = status
   self.scanBar = scanBar
   self.scanBarText = scanBarText
+  self.tradeScroll = tradeScroll
+  self.tradeEdit = tradeEdit
+  self.tradeTotals = tradeTotals
 end
 
 function UI:ShowCapitalTooltip(owner)
@@ -1080,7 +1170,16 @@ function UI:OnBuyClick(row)
   if type(PlaceAuctionBid) ~= "function" then
     return
   end
+  local itemID = stop.itemID
+  local itemName = stop.queryName
+  if stop.offer and type(stop.offer.name) == "string" and stop.offer.name ~= "" then
+    itemName = stop.offer.name
+  end
+  local note = self:ActionNote(action)
   stop:BeginSettle(bid)
+  if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.RecordBuyClick then
+    OnyxiaGold.TradeLog:RecordBuyClick(itemID, itemName, bid.count, bid.buyout, note)
+  end
   PlaceAuctionBid("list", bid.index, bid.buyout)
   if stop.NoteBidSent then
     stop:NoteBidSent()
@@ -1235,6 +1334,47 @@ function UI:Refresh()
 
   self:UpdateList()
   self:PaintScanProgress()
+  self:RefreshTrades()
+end
+
+function UI:RefreshTrades()
+  if not self.tradeEdit then
+    return
+  end
+  local text = ""
+  local totals = "Spent 0c    Received 0c"
+  if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.Dump then
+    text = OnyxiaGold.TradeLog:Dump() or ""
+  end
+  if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.TotalsLine then
+    totals = OnyxiaGold.TradeLog:TotalsLine()
+  end
+  if self.tradeTotals then
+    self.tradeTotals:SetText(totals)
+  end
+  local edit = self.tradeEdit
+  edit.freeze = false
+  edit:SetText(text)
+  edit.frozenText = text
+  edit.freeze = true
+  local _, breaks = string.gsub(text, "\n", "\n")
+  local lines = (breaks or 0) + 1
+  if text == "" then
+    lines = 1
+  end
+  edit:SetHeight(math.max(118, lines * 14 + 20))
+  if self.tradeScroll and self.tradeScroll.UpdateScrollChildRect then
+    self.tradeScroll:UpdateScrollChildRect()
+  end
+end
+
+function UI:CopyTrades()
+  if not self.tradeEdit then
+    return
+  end
+  self:RefreshTrades()
+  self.tradeEdit:SetFocus()
+  self.tradeEdit:HighlightText()
 end
 
 function UI:Show()

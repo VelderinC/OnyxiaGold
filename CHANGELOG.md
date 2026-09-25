@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7 — Scan progress and action rows
+
+- Show a progress bar while Quick Scan or Full Scan runs, and show the buy, conversion, and post on each action row.
+
 ## 0.1.6 — Log clock crash
 
 - Replace `math.mod` with the Lua 5.1 `%` operator so logging no longer crashes on Warmane 3.3.5.

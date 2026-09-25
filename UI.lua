@@ -11,17 +11,17 @@ local UI = OnyxiaGold.UI
 
 local FRAME_WIDTH = 760
 local FRAME_HEIGHT = 572
-local NUM_ROWS = 12
-local ROW_HEIGHT = 18
+local NUM_ROWS = 10
+local ROW_HEIGHT = 32
 local HEADER_Y = -170
 local LIST_TOP = HEADER_Y - 18
 
 local COLS = {
-  { key = "name", label = "What to do now", width = 280, justify = "LEFT" },
+  { key = "name", label = "What to do now", width = 360, justify = "LEFT" },
   { key = "profit", label = "EV", width = 110, justify = "RIGHT" },
   { key = "cash", label = "Cash", width = 110, justify = "RIGHT" },
   { key = "crafts", label = "Qty", width = 50, justify = "RIGHT" },
-  { key = "type", label = "Type", width = 90, justify = "LEFT" },
+  { key = "type", label = "Type", width = 70, justify = "LEFT" },
 }
 
 local function addLabel(parent, text, template)
@@ -32,6 +32,40 @@ end
 
 local function itemName(id)
   return OnyxiaGold.Data.GetItemName(id) or ("item:" .. tostring(id))
+end
+
+-- Buy, convert, and post stay one action. The row says all three.
+local function actionInstruction(action)
+  if not action or action.kind ~= "BUY_AND_CRAFT" then
+    return action and action.name or ""
+  end
+  local buy = action.name or "Buy"
+  local opp = action.sourceOpp
+  local crafts = tonumber(action.crafts) or 0
+  if crafts <= 0 or type(opp) ~= "table" then
+    return buy
+  end
+  local per = tonumber(opp.outputCount) or 1
+  if per < 1 then
+    per = 1
+  end
+  local units = math.floor(crafts * per + 0.5)
+  if units < 1 then
+    return buy
+  end
+  local outID = opp.outputItemIDs and opp.outputItemIDs[1]
+  local outName = outID and OnyxiaGold.Data.GetItemName(outID) or nil
+  if not outName or outName == "" then
+    if action.detail and action.detail ~= "" then
+      return buy .. ", " .. action.detail
+    end
+    return buy
+  end
+  local pronoun = "them"
+  if units == 1 then
+    pronoun = "it"
+  end
+  return string.format("%s, convert into %d %s, then post %s.", buy, units, outName, pronoun)
 end
 
 local function setRGB(fs, r, g, b)
@@ -243,7 +277,7 @@ function UI:Create()
 
   local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", frame, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, LIST_TOP)
-  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 42)
+  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 58)
   scroll.offset = 0
   scroll:EnableMouseWheel(1)
   scroll:SetScript("OnVerticalScroll", function(self, value)
@@ -311,9 +345,15 @@ function UI:Create()
       local col = COLS[c]
       local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
       fs:SetPoint("LEFT", row, "LEFT", cx, 0)
-      fs:SetWidth(col.width - 4)
+      fs:SetWidth(col.width - 6)
       fs:SetJustifyH(col.justify)
+      fs:SetJustifyV("MIDDLE")
       fs:SetText("")
+      if col.key == "name" then
+        fs:SetHeight(ROW_HEIGHT - 2)
+        fs:SetWordWrap(true)
+        fs:SetNonSpaceWrap(false)
+      end
       row.cells[col.key] = fs
       cx = cx + col.width
     end
@@ -333,6 +373,28 @@ function UI:Create()
   status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 16)
   status:SetJustifyH("LEFT")
 
+  local scanBar = CreateFrame("StatusBar", "OnyxiaGoldScanBar", frame)
+  scanBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 36)
+  scanBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 36)
+  scanBar:SetHeight(16)
+  scanBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+  scanBar:SetStatusBarColor(0.86, 0.62, 0.12)
+  scanBar:SetMinMaxValues(0, 1)
+  scanBar:SetValue(0)
+  local scanBarBg = scanBar:CreateTexture(nil, "BACKGROUND")
+  scanBarBg:SetAllPoints(scanBar)
+  scanBarBg:SetTexture(0.12, 0.1, 0.06, 0.9)
+  local scanBarText = scanBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  scanBarText:SetPoint("LEFT", scanBar, "LEFT", 6, 0)
+  scanBarText:SetPoint("RIGHT", scanBar, "RIGHT", -6, 0)
+  scanBarText:SetJustifyH("CENTER")
+  scanBarText:SetJustifyV("MIDDLE")
+  scanBarText:SetTextColor(1, 0.96, 0.86)
+  scanBarText:SetShadowOffset(1, -1)
+  scanBarText:SetShadowColor(0, 0, 0, 1)
+  scanBarText:SetText("")
+  scanBar:Hide()
+
   self.frame = frame
   self.quickScanButton = quickBtn
   self.fullScanButton = fullBtn
@@ -348,6 +410,8 @@ function UI:Create()
   self.scroll = scroll
   self.rows = rows
   self.status = status
+  self.scanBar = scanBar
+  self.scanBarText = scanBarText
 end
 
 function UI:ShowCapitalTooltip(owner)
@@ -544,6 +608,122 @@ function UI:SetStatus(text)
   self.status:SetText(text or "")
 end
 
+local function formatRemaining(seconds)
+  seconds = tonumber(seconds) or 0
+  if seconds < 0 then
+    seconds = 0
+  end
+  seconds = math.floor(seconds + 0.5)
+  if seconds >= 3600 then
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    return string.format("%dh %dm", hours, minutes)
+  end
+  if seconds >= 60 then
+    local minutes = math.floor(seconds / 60)
+    local secs = seconds % 60
+    return string.format("%dm %ds", minutes, secs)
+  end
+  return string.format("%ds", seconds)
+end
+
+local function setBarFill(bar, fraction)
+  if fraction < 0 then
+    fraction = 0
+  end
+  if fraction > 1 then
+    fraction = 1
+  end
+  bar:SetMinMaxValues(0, 1000)
+  bar:SetValue(math.floor(fraction * 1000 + 0.5))
+end
+
+function UI:PaintScanProgress()
+  local bar = self.scanBar
+  if not bar then
+    return
+  end
+  local progress = OnyxiaGold.Scanner and OnyxiaGold.Scanner.GetProgress and OnyxiaGold.Scanner:GetProgress()
+  if not progress then
+    bar:Hide()
+    return
+  end
+  bar:Show()
+  local text = ""
+  if progress.mode == "full" then
+    local shown = (tonumber(progress.page) or 0) + 1
+    local total = tonumber(progress.pagesTotal)
+    if not total or total <= 0 then
+      setBarFill(bar, 0)
+      text = string.format("page %d · total unknown", shown)
+    else
+      local done = tonumber(progress.index) or 0
+      if done < 0 then
+        done = 0
+      end
+      if done > total then
+        done = total
+      end
+      setBarFill(bar, done / total)
+      text = string.format("page %d / %d", shown, total)
+      local elapsed = tonumber(progress.elapsed) or 0
+      if done > 0 and done < total and elapsed > 0 then
+        local left = (elapsed / done) * (total - done)
+        text = text .. "  ·  ~" .. formatRemaining(left)
+      end
+    end
+  else
+    local done = tonumber(progress.index) or 0
+    local total = tonumber(progress.total) or 0
+    local name = progress.name or ""
+    if done < 0 then
+      done = 0
+    end
+    if total > 0 and done > total then
+      done = total
+    end
+    if total <= 0 then
+      setBarFill(bar, 0)
+      text = name
+    else
+      local fraction = done / total
+      local pagesTotal = tonumber(progress.pagesTotal)
+      local onItem = done < total
+      if onItem and pagesTotal and pagesTotal > 1 then
+        local pageDone = tonumber(progress.page) or 0
+        if pageDone < 0 then
+          pageDone = 0
+        end
+        if pageDone > pagesTotal then
+          pageDone = pagesTotal
+        end
+        fraction = (done + (pageDone / pagesTotal)) / total
+      end
+      setBarFill(bar, fraction)
+      if done >= total then
+        text = string.format("%d / %d", total, total)
+      else
+        text = string.format("%d / %d   %s", done + 1, total, name)
+        if onItem and pagesTotal and pagesTotal > 1 then
+          local shownPage = (tonumber(progress.page) or 0) + 1
+          if shownPage > pagesTotal then
+            shownPage = pagesTotal
+          end
+          text = text .. string.format("   page %d / %d", shownPage, pagesTotal)
+        end
+      end
+      local elapsed = tonumber(progress.elapsed) or 0
+      if done > 0 and done < total and elapsed > 0 then
+        local left = (elapsed / done) * (total - done)
+        text = text .. "  ·  ~" .. formatRemaining(left)
+      end
+    end
+  end
+  if self.scanBarText then
+    self.scanBarText:SetText(text)
+  end
+end
+
 function UI:RefreshHeader()
   if not self.frame then
     return
@@ -648,7 +828,7 @@ function UI:UpdateList()
     row.opp = action and action.sourceOpp or nil
     if action then
       row:Show()
-      local label = tostring(offset + i) .. ". " .. (action.name or "")
+      local label = tostring(offset + i) .. ". " .. actionInstruction(action)
       row.cells.name:SetText(label)
       if action.kind == "COLLECT_MAIL" then
         row.cells.profit:SetText("")
@@ -710,6 +890,7 @@ function UI:Refresh()
   end
 
   self:UpdateList()
+  self:PaintScanProgress()
 end
 
 function UI:Show()

@@ -38,6 +38,58 @@ function Mail:OnMailboxClosed()
   OnyxiaGold.Log:Debug("Mail", "Mailbox closed; snapshot persisted")
 end
 
+local function subjectMatches(subject, fmt)
+  if type(subject) ~= "string" or type(fmt) ~= "string" then
+    return false
+  end
+  local prefix = string.match(fmt, "^(.*)%%s")
+  if not prefix then
+    return false
+  end
+  if prefix == "" then
+    return true
+  end
+  return string.sub(subject, 1, string.len(prefix)) == prefix
+end
+
+-- Invoice metadata first. Subject text is used only against the client's own
+-- localized format globals, and only when those globals exist.
+function Mail:Classify(info)
+  info = info or {}
+  local cod = tonumber(info.cod) or 0
+  local money = tonumber(info.money) or 0
+  local items = tonumber(info.itemCount) or 0
+  local invoice = info.invoiceType
+  if cod > 0 then
+    return "COD_MAIL", "BLOCKED"
+  end
+  if invoice == "seller" and money > 0 then
+    return "AH_SALE_GOLD", "SAFE_AUTO_PROCESS"
+  end
+  if invoice == "seller_temp_invoice" then
+    return "AH_PENDING_SALE", "MANUAL_ONLY"
+  end
+  if invoice == "buyer" and items > 0 then
+    if subjectMatches(info.subject, AUCTION_WON_MAIL_SUBJECT) then
+      return "AH_WON_ITEM", "SAFE_AUTO_PROCESS"
+    end
+    return "AH_PURCHASE_ITEM", "SAFE_AUTO_PROCESS"
+  end
+  if items > 0 and subjectMatches(info.subject, AUCTION_EXPIRED_MAIL_SUBJECT) then
+    return "AH_EXPIRED_ITEM", "SAFE_AUTO_PROCESS"
+  end
+  if items > 0 and subjectMatches(info.subject, AUCTION_REMOVED_MAIL_SUBJECT) then
+    return "AH_CANCELLED_ITEM", "SAFE_AUTO_PROCESS"
+  end
+  if info.canReply then
+    return "PERSONAL_MAIL", "MANUAL_ONLY"
+  end
+  if invoice or items > 0 or money > 0 then
+    return "SYSTEM_OTHER", "MANUAL_ONLY"
+  end
+  return "UNKNOWN", "MANUAL_ONLY"
+end
+
 -- 3.3.5 MailFrame: bid + deposit - consignment for seller invoices.
 local function sellerInvoiceAmount(bid, deposit, consignment)
   bid = tonumber(bid) or 0
@@ -71,11 +123,42 @@ function Mail:ScanInbox()
   local pendingEta
   local items = {}
 
+  local messages = {}
   for i = 1, numItems do
-    local _, _, _, _, money, CODAmount, _, itemCount = GetInboxHeaderInfo(i)
+    local _, _, sender, subject, money, CODAmount, _, itemCount, _, _, _, canReply = GetInboxHeaderInfo(i)
     money = tonumber(money) or 0
     CODAmount = tonumber(CODAmount) or 0
     itemCount = tonumber(itemCount) or 0
+    local invoiceType, _, _, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin
+    if type(GetInboxInvoiceInfo) == "function" then
+      invoiceType, _, _, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin = GetInboxInvoiceInfo(i)
+    end
+    local class, safety = self:Classify({
+      cod = CODAmount,
+      money = money,
+      itemCount = itemCount,
+      invoiceType = invoiceType,
+      subject = subject,
+      canReply = canReply and true or false,
+    })
+    local attached = {}
+    table.insert(messages, {
+      index = i,
+      sender = sender,
+      subject = subject,
+      money = money,
+      cod = CODAmount,
+      itemCount = itemCount,
+      invoiceType = invoiceType,
+      class = class,
+      safety = safety,
+      items = attached,
+      bid = tonumber(bid),
+      buyout = tonumber(buyout),
+      deposit = tonumber(deposit),
+      consignment = tonumber(consignment),
+      timestamp = time(),
+    })
 
     -- COD is a liability, never wealth. Its attachments are not stock.
     if CODAmount > 0 then
@@ -87,14 +170,15 @@ function Mail:ScanInbox()
           local _, _, count = GetInboxItem(i, attach)
           local itemID = OnyxiaGold.ParseItemID(link)
           if itemID then
-            items[itemID] = (items[itemID] or 0) + (tonumber(count) or 1)
+            local n = tonumber(count) or 1
+            items[itemID] = (items[itemID] or 0) + n
+            table.insert(attached, { itemID = itemID, count = n })
           end
         end
       end
       if money > 0 then
         claimable = claimable + money
       else
-        local invoiceType, _, _, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin = GetInboxInvoiceInfo(i)
         if invoiceType == "seller_temp_invoice" then
           pending = pending + sellerInvoiceAmount(bid, deposit, consignment)
           if etaHour ~= nil or etaMin ~= nil then
@@ -120,6 +204,7 @@ function Mail:ScanInbox()
   row.mail.snapshotTimestamp = time()
   row.mail.snapshotComplete = complete
   row.mail.items = items
+  row.mail.messages = messages
   row.mail.visibleCount = numItems
   row.mail.totalCount = totalItems
   -- Kept so older readers still see the same counts.

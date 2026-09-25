@@ -350,6 +350,30 @@ function UI:Create()
     OnyxiaGold.OpportunityEngine:Refresh()
   end)
 
+  local goldBtn = CreateFrame("Button", "OnyxiaGoldCollectGoldButton", frame, "UIPanelButtonTemplate")
+  goldBtn:SetWidth(110)
+  goldBtn:SetHeight(22)
+  goldBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 12)
+  goldBtn:SetText("Collect Gold")
+  goldBtn:SetScript("OnClick", function()
+    if OnyxiaGold.MailProcessor then
+      OnyxiaGold.MailProcessor:CollectGold(true)
+    end
+    OnyxiaGold.UI:ShowFactoryMail()
+  end)
+
+  local sweepBtn = CreateFrame("Button", "OnyxiaGoldFactorySweepButton", frame, "UIPanelButtonTemplate")
+  sweepBtn:SetWidth(110)
+  sweepBtn:SetHeight(22)
+  sweepBtn:SetPoint("LEFT", goldBtn, "RIGHT", 6, 0)
+  sweepBtn:SetText("Factory Sweep")
+  sweepBtn:SetScript("OnClick", function()
+    if OnyxiaGold.MailProcessor then
+      OnyxiaGold.MailProcessor:Sweep(true)
+    end
+    OnyxiaGold.UI:ShowFactoryMail()
+  end)
+
   local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")
   master:SetWidth(24)
   master:SetHeight(24)
@@ -820,6 +844,14 @@ function UI:PaintAuctionPage(page)
       end
     end
   end
+end
+
+function UI:ShowFactoryMail()
+  local line = "Factory mail."
+  if OnyxiaGold.MailProcessor and OnyxiaGold.MailProcessor.SummaryLine then
+    line = OnyxiaGold.MailProcessor:SummaryLine()
+  end
+  self:SetStatus(line)
 end
 
 function UI:ShowPostRow(text)

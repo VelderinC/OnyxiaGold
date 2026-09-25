@@ -28,6 +28,7 @@ CharacterState.lua
 Capital.lua
 Inventory.lua
 Mail.lua
+MailProcessor.lua
 OwnedAuctions.lua
 Stock.lua
 Capabilities.lua

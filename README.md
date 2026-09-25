@@ -6,9 +6,9 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.25** shows a Sort button on the open backpack, a thin quality rim on bag items, and a resizable /og window. A profitable 20-hour transmute still ranks above repeatable crafts. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
+Version **0.1.29** keeps a post row after a conversion, transmute, or craft is sitting in your bags. One click lists one stack while the Auction House is open. A profitable 20-hour transmute still ranks above repeatable crafts. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
 
-The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, does not loot mail, and does not use anything outside the WoW client.
+The addon stays inside the normal 3.3.5a Lua environment. It does not buy or post on a timer, does not loot mail, and does not use anything outside the WoW client.
 
 GitHub: https://github.com/VelderinC/OnyxiaGold
 
@@ -180,7 +180,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - If the mailbox has not loaded every message, Mail Ready and Pending are approximate (`snapshotComplete = false`)
 - Known recipes are replaced per profession on a complete tradeskill scan. They are not appended forever
 - `sensibleCrafts` is a crude cap against the visible output book after stock he already holds, not a liquidity model or a sale rate. Partial and stale snapshots still count
-- A buy stops at free general bag slots. The auction page shows the stop and does not buy, bid, or post for him
+- A buy stops at free general bag slots. The auction page shows the stop. Post lists one stack from that row, and only from the Post click
 - Bank counts are last-open snapshots
 - Recipe knowledge is only as current as the last tradeskill window scan
 - No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)

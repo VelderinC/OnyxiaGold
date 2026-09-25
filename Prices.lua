@@ -208,6 +208,57 @@ function Prices:GetOpportunitySaleUnit(itemID)
   return self:GetLiquidationPrice(itemID)
 end
 
+-- Stack size already stored on the buyout book, at the P25 band.
+-- Nil when that scan did not keep a stack size.
+function Prices:GetPlannedStackSize(itemID)
+  local depth = self:GetDepth(itemID)
+  if type(depth) ~= "table" then
+    return nil
+  end
+  local qty = 0
+  local n = table.getn(depth)
+  for i = 1, n do
+    local lvl = depth[i]
+    local q = lvl and tonumber(lvl.q or lvl.quantity) or 0
+    if q > 0 then
+      qty = qty + q
+    end
+  end
+  if qty <= 0 then
+    return nil
+  end
+  local target = qty * 0.25
+  if target < 1 then
+    target = 1
+  end
+  local cumulative = 0
+  local stack
+  for i = 1, n do
+    local lvl = depth[i]
+    local q = lvl and tonumber(lvl.q or lvl.quantity) or 0
+    local s = lvl and tonumber(lvl.s) or nil
+    if q > 0 then
+      if s and s > 0 then
+        stack = s
+      end
+      cumulative = cumulative + q
+      if cumulative >= target then
+        if s and s > 0 then
+          return math.floor(s)
+        end
+        if stack and stack > 0 then
+          return math.floor(stack)
+        end
+        return nil
+      end
+    end
+  end
+  if stack and stack > 0 then
+    return math.floor(stack)
+  end
+  return nil
+end
+
 function Prices:GetConservative(itemID)
   return self:GetOpportunitySaleUnit(itemID)
 end

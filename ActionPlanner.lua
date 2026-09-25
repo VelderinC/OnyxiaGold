@@ -1085,6 +1085,217 @@ function Planner:ReserveSelected(person)
   })
 end
 
+local function addSellOutput(map, itemID, typeLabel)
+  itemID = tonumber(itemID)
+  if not itemID or map[itemID] then
+    return
+  end
+  map[itemID] = typeLabel or "Post"
+end
+
+-- Outputs of conversions, transmutes, and crafts that are meant to be sold.
+-- A finished stack stays on the list after there is nothing left to buy.
+local function sellOutputs()
+  local map = {}
+  local data = OnyxiaGold.Data
+  local conv = data and data.Conversions or {}
+  for i = 1, table.getn(conv) do
+    local def = conv[i]
+    if def then
+      addSellOutput(map, def.targetItemID, def.typeLabel)
+      if def.reversible then
+        addSellOutput(map, def.sourceItemID, def.typeLabel)
+      end
+    end
+  end
+  local trans = data and data.Transmutes or {}
+  for i = 1, table.getn(trans) do
+    local def = trans[i]
+    local outputs = def and def.outputs
+    if type(outputs) == "table" then
+      for j = 1, table.getn(outputs) do
+        addSellOutput(map, outputs[j] and outputs[j].itemID, def.typeLabel or "Transmute")
+      end
+    end
+  end
+  local crafts = data and data.EnchantCrafts or {}
+  for i = 1, table.getn(crafts) do
+    local def = crafts[i]
+    local outputs = def and def.outputs
+    if type(outputs) == "table" then
+      for j = 1, table.getn(outputs) do
+        addSellOutput(map, outputs[j] and outputs[j].itemID, def.typeLabel or "Enchanting")
+      end
+    end
+  end
+  local opps = {}
+  if OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.GetResults then
+    opps = OnyxiaGold.OpportunityEngine:GetResults() or {}
+  end
+  for i = 1, table.getn(opps) do
+    local opp = opps[i]
+    local ids = opp and opp.outputItemIDs
+    if type(ids) == "table" and not (opp.saleExitUnknown and opp.type ~= "DISENCHANT") then
+      for j = 1, table.getn(ids) do
+        local label = opp.typeLabel or opp.type
+        if opp.type == "DISENCHANT" then
+          label = "Enchanting"
+        end
+        addSellOutput(map, ids[j], label)
+      end
+    end
+  end
+  return map
+end
+
+local function realBagCount(itemID)
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetBagCount then
+    return OnyxiaGold.Inventory:GetBagCount(itemID) or 0
+  end
+  return bagCount(itemID)
+end
+
+local function reservedInputUnits(actions, itemID)
+  local n = 0
+  for i = 1, table.getn(actions) do
+    local action = actions[i]
+    local kind = action and action.kind
+    if kind == "BUY_AND_CRAFT" or kind == "CRAFT" or kind == "CRAFT_OWNED" then
+      local lines = action.person and action.person.inputLines
+      if type(lines) == "table" then
+        for j = 1, table.getn(lines) do
+          local line = lines[j]
+          if line and tonumber(line.itemID) == itemID then
+            n = n + (tonumber(line.ownedUnits) or 0)
+          end
+        end
+      end
+    end
+  end
+  return n
+end
+
+local function clickStackSize(itemID, postCount)
+  local stack
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.GetPlannedStackSize then
+    stack = OnyxiaGold.Prices:GetPlannedStackSize(itemID)
+  end
+  if (not stack or stack < 1) and OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetStackSize then
+    stack = OnyxiaGold.Inventory:GetStackSize(itemID)
+  end
+  stack = tonumber(stack) or postCount
+  if stack < 1 then
+    stack = postCount
+  end
+  local maxStack = OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetStackSize and OnyxiaGold.Inventory:GetStackSize(itemID)
+  if maxStack and maxStack > 0 and stack > maxStack then
+    stack = maxStack
+  end
+  if stack > postCount then
+    stack = postCount
+  end
+  if stack < 1 then
+    stack = 1
+  end
+  return math.floor(stack)
+end
+
+-- Finished sellable output still in bags. One row per item.
+-- Units a selected buy or craft still needs are left on that row.
+local function readyPostActions(actions)
+  local posts = {}
+  local outputs = sellOutputs()
+  local ids = {}
+  for itemID in pairs(outputs) do
+    table.insert(ids, itemID)
+  end
+  table.sort(ids)
+  for i = 1, table.getn(ids) do
+    local itemID = ids[i]
+    local inBags = realBagCount(itemID)
+    local reserved = reservedInputUnits(actions, itemID)
+    local postCount = inBags - reserved
+    if postCount < 0 then
+      postCount = 0
+    end
+    local saleUnit = OnyxiaGold.Prices and OnyxiaGold.Prices.GetOpportunitySaleUnit
+      and OnyxiaGold.Prices:GetOpportunitySaleUnit(itemID)
+    saleUnit = tonumber(saleUnit)
+    if postCount >= 1 and saleUnit and saleUnit > 0 then
+      local stack = clickStackSize(itemID, postCount)
+      local gross = math.floor(saleUnit * stack + 0.5)
+      local net = gross
+      if OnyxiaGold.ApplyAuctionHouseCut then
+        net = OnyxiaGold:ApplyAuctionHouseCut(gross)
+      end
+      local bagNet = saleUnit * postCount
+      if OnyxiaGold.ApplyAuctionHouseCut then
+        bagNet = OnyxiaGold:ApplyAuctionHouseCut(bagNet)
+      end
+      local itemName = "item"
+      if OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+        itemName = OnyxiaGold.Data.GetItemName(itemID) or itemName
+      end
+      local cut = "5%"
+      if OnyxiaGold.GetAuctionHouseCut and OnyxiaGold.FormatPercent then
+        cut = OnyxiaGold.FormatPercent(OnyxiaGold:GetAuctionHouseCut())
+      end
+      local name = string.format(
+        "Post %d %s. %d in bags. Stack of %d at %s each, %s after the %s cut.",
+        postCount,
+        itemName,
+        inBags,
+        stack,
+        OnyxiaGold.FormatMoney(saleUnit),
+        OnyxiaGold.FormatMoney(net),
+        cut
+      )
+      table.insert(posts, {
+        kind = "POST",
+        name = name,
+        typeLabel = outputs[itemID] or "Post",
+        expectedProfit = bagNet,
+        cashRequiredNow = 0,
+        crafts = postCount,
+        state = "POST",
+        detail = "One click posts one stack. Open the Auction House first.",
+        outputItemID = itemID,
+        bagCount = inBags,
+        postCount = postCount,
+        stackSize = stack,
+        saleUnit = saleUnit,
+        bid = gross,
+        buyout = gross,
+        duration = 2,
+        sortName = itemName,
+      })
+    end
+  end
+  table.sort(posts, function(a, b)
+    return (a.sortName or "") < (b.sortName or "")
+  end)
+  return posts
+end
+
+local function dropCoveredHoldRows(actions, posting)
+  local kept = {}
+  for i = 1, table.getn(actions) do
+    local action = actions[i]
+    local drop = false
+    if action.kind == "POST_OR_HOLD" then
+      local opp = action.sourceOpp
+      local outID = opp and opp.outputItemIDs and tonumber(opp.outputItemIDs[1])
+      if outID and posting[outID] then
+        drop = true
+      end
+    end
+    if not drop then
+      table.insert(kept, action)
+    end
+  end
+  return kept
+end
+
 function Planner:Refresh()
   self.actions = {}
   self.locked = {}
@@ -1363,6 +1574,27 @@ function Planner:Refresh()
       claimable = claimable,
       mailPartial = mailPartial and true or false,
     })
+  end
+
+  local posts = readyPostActions(self.actions)
+  local posting = {}
+  for i = 1, table.getn(posts) do
+    posting[posts[i].outputItemID] = true
+  end
+  if table.getn(posts) > 0 then
+    self.actions = dropCoveredHoldRows(self.actions, posting)
+    local at = 1
+    while at <= table.getn(self.actions) do
+      local action = self.actions[at]
+      if action.kind == "WITHDRAW" or action.state == "NEEDS_WITHDRAW" then
+        at = at + 1
+      else
+        break
+      end
+    end
+    for i = 1, table.getn(posts) do
+      table.insert(self.actions, at + i - 1, posts[i])
+    end
   end
 
   if table.getn(previewPeople) > 0 then

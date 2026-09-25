@@ -157,7 +157,11 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Item-use; no profession |
 | 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Priced only. Not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented |
 | 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
-| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. Transmute Master is an EV modifier (1.20x), not a craft gate |
+| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone is a tool, not a reagent |
+| Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |
+| Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown |
+| Epic gems (Ametrine, King's Amber, Dreadstone, Majestic Zircon, Eye of Zul) | Alchemy 450. One shared 20-hour transmute per plan |
+| Cardinal Ruby | Not an action. Minimum skill is unset |
 
 Market opportunities require first-craft expected profit > 0 after AH cut. The action list then keeps only what this character can execute **now** with current gold, bags, and recipes. Expected sale proceeds are never treated as cash for the next buy.
 
@@ -227,7 +231,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 
 ## Future roadmap
 
-1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth, caps planned output to the visible book, keeps Dream Shard one-way, and leaves prismatic shards off the action list. Still ahead: Factory Mail, Factory Inventory, the epic-gem cooldown picker, and disenchant EV.
+1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth, caps planned output to the visible book, keeps Dream Shard one-way, leaves prismatic shards off the action list, and adds the epic-gem cooldown choice plus Earthsiege and Skyflare. Still ahead: Factory Mail, Factory Inventory, and disenchant EV.
 2. **v0.2.0** — Full disenchant expected-value engine (weapon vs armour, iLevel, quality; Full Scan feed)
 3. **v0.2.1+** — Enchanting conversions: Abyssal Shatter, Void Shatter (confirmed 3.3.5 data), vellum scrolls
 4. **v0.3+** — Recursive capability-aware transformation graph (GLOBAL paths vs EXECUTABLE paths)

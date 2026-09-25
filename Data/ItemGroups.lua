@@ -33,6 +33,32 @@ local Items = {
   SARONITE_BAR = { id = 36913, name = "Saronite Bar" },
   TITANIUM_BAR = { id = 41163, name = "Titanium Bar" },
 
+  -- Alchemy transmute reagents and outputs. Names only; prices come from the scan.
+  -- Philosopher's Stone is a tool, not an input.
+  PHILOSOPHERS_STONE = { id = 9149, name = "Philosopher's Stone" },
+  DARK_JADE = { id = 36932, name = "Dark Jade" },
+  HUGE_CITRINE = { id = 36929, name = "Huge Citrine" },
+  ETERNAL_FIRE = { id = 36860, name = "Eternal Fire" },
+  EARTHSIEGE_DIAMOND = { id = 41334, name = "Earthsiege Diamond" },
+  BLOODSTONE = { id = 36917, name = "Bloodstone" },
+  CHALCEDONY = { id = 36923, name = "Chalcedony" },
+  ETERNAL_AIR = { id = 35623, name = "Eternal Air" },
+  SKYFLARE_DIAMOND = { id = 41266, name = "Skyflare Diamond" },
+  MONARCH_TOPAZ = { id = 36930, name = "Monarch Topaz" },
+  ETERNAL_SHADOW = { id = 35627, name = "Eternal Shadow" },
+  AMETRINE = { id = 36931, name = "Ametrine" },
+  AUTUMNS_GLOW = { id = 36921, name = "Autumn's Glow" },
+  ETERNAL_LIFE = { id = 35625, name = "Eternal Life" },
+  KINGS_AMBER = { id = 36922, name = "King's Amber" },
+  TWILIGHT_OPAL = { id = 36927, name = "Twilight Opal" },
+  DREADSTONE = { id = 36928, name = "Dreadstone" },
+  SKY_SAPPHIRE = { id = 36924, name = "Sky Sapphire" },
+  MAJESTIC_ZIRCON = { id = 36925, name = "Majestic Zircon" },
+  FOREST_EMERALD = { id = 36933, name = "Forest Emerald" },
+  EYE_OF_ZUL = { id = 36934, name = "Eye of Zul" },
+  SCARLET_RUBY = { id = 36918, name = "Scarlet Ruby" },
+  CARDINAL_RUBY = { id = 36919, name = "Cardinal Ruby" },
+
   -- Upcoming economic materials (watchlist / later engines)
   NETHERWEAVE_CLOTH = { id = 21877, name = "Netherweave Cloth" },
   BOLT_OF_NETHERWEAVE = { id = 21840, name = "Bolt of Netherweave" },

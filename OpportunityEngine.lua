@@ -37,6 +37,7 @@ local function newOpportunity(fields)
     confidence = fields.confidence or 1.0,
     confidenceNotes = fields.confidenceNotes or "",
     notes = fields.notes or "",
+    inputs = fields.inputs,
     inputItemIDs = fields.inputItemIDs,
     outputItemIDs = fields.outputItemIDs,
     dataTimestamp = fields.dataTimestamp,

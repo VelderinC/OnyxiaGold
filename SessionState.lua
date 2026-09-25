@@ -282,53 +282,88 @@ local function consumeDepth(book, quantity)
   return need == 0
 end
 
+local function reservationLines(spec)
+  if type(spec.inputs) == "table" and table.getn(spec.inputs) > 0 then
+    return spec.inputs
+  end
+  local ownedUnits = tonumber(spec.ownedUnits) or 0
+  local buyUnits = tonumber(spec.buyUnits) or 0
+  local itemID = tonumber(spec.itemID)
+  if itemID or ownedUnits > 0 or buyUnits > 0 then
+    return {
+      { itemID = itemID, ownedUnits = ownedUnits, buyUnits = buyUnits },
+    }
+  end
+  return {}
+end
+
 function Session:Reserve(spec)
   spec = spec or {}
   if not self.active then
     return false
   end
   local cash = tonumber(spec.cash) or 0
-  local ownedUnits = tonumber(spec.ownedUnits) or 0
-  local buyUnits = tonumber(spec.buyUnits) or 0
-  local itemID = tonumber(spec.itemID)
-  if cash < 0 or ownedUnits < 0 or buyUnits < 0 then
+  if cash < 0 or cash > self.cash then
     return false
-  end
-  if cash > self.cash then
-    return false
-  end
-  if ownedUnits > 0 then
-    if not itemID or (self.bags[itemID] or 0) < ownedUnits then
-      return false
-    end
-  end
-  if buyUnits > 0 then
-    if not itemID then
-      return false
-    end
-    local quote = self:Quote(itemID, buyUnits)
-    if not quote.complete then
-      return false
-    end
   end
   if spec.cooldown and self.cooldowns[spec.cooldown] then
     return false
   end
 
-  if buyUnits > 0 then
-    local book = self:EnsureDepth(itemID)
-    if not consumeDepth(book, buyUnits) then
+  local lines = reservationLines(spec)
+  local normalized = {}
+  for i = 1, table.getn(lines) do
+    local line = lines[i] or {}
+    local itemID = tonumber(line.itemID)
+    local ownedUnits = tonumber(line.ownedUnits) or 0
+    local buyUnits = tonumber(line.buyUnits) or 0
+    if ownedUnits < 0 or buyUnits < 0 then
       return false
+    end
+    if ownedUnits > 0 then
+      if not itemID or (self.bags[itemID] or 0) < ownedUnits then
+        return false
+      end
+    end
+    if buyUnits > 0 then
+      if not itemID then
+        return false
+      end
+      local quote = self:Quote(itemID, buyUnits)
+      if not quote.complete then
+        return false
+      end
+    end
+    table.insert(normalized, {
+      itemID = itemID,
+      ownedUnits = ownedUnits,
+      buyUnits = buyUnits,
+    })
+  end
+
+  for i = 1, table.getn(normalized) do
+    local line = normalized[i]
+    if line.buyUnits > 0 then
+      local book = self:EnsureDepth(line.itemID)
+      if not consumeDepth(book, line.buyUnits) then
+        return false
+      end
     end
   end
   self.cash = self.cash - cash
   self.spent = self.spent + cash
-  if ownedUnits > 0 then
-    self.bags[itemID] = self.bags[itemID] - ownedUnits
-    if self.bags[itemID] <= 0 then
-      self.bags[itemID] = nil
+  for i = 1, table.getn(normalized) do
+    local line = normalized[i]
+    if line.ownedUnits > 0 then
+      self.bags[line.itemID] = self.bags[line.itemID] - line.ownedUnits
+      if self.bags[line.itemID] <= 0 then
+        self.bags[line.itemID] = nil
+      end
     end
   end
+  local itemID = normalized[1] and normalized[1].itemID or nil
+  local ownedUnits = normalized[1] and normalized[1].ownedUnits or 0
+  local buyUnits = normalized[1] and normalized[1].buyUnits or 0
   if spec.cooldown then
     self.cooldowns[spec.cooldown] = true
   end
@@ -342,6 +377,7 @@ function Session:Reserve(spec)
     cash = cash,
     ownedUnits = ownedUnits,
     buyUnits = buyUnits,
+    inputs = normalized,
     cooldown = spec.cooldown,
     outputItemID = outputID,
     outputUnits = outputUnits,

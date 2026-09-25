@@ -92,6 +92,18 @@ OnyxiaGold.Data.Conversions = {
   },
 }
 
+-- Philosopher's Stone is a tool on every transmute. It is not consumed, and it is
+-- not an input. Other stones may satisfy the tool category; that membership is
+-- unset, so the planner does not require item 9149 to be in the bags.
+local function alchemyTool(requirements)
+  requirements.profession = "Alchemy"
+  requirements.tool = "Philosopher's Stone"
+  requirements.toolItemID = I.PHILOSOPHERS_STONE.id
+  requirements.toolConsumed = false
+  requirements.specialisationOptional = "Transmutation"
+  return requirements
+end
+
 OnyxiaGold.Data.Transmutes = {
   {
     id = "saronite_to_titanium",
@@ -104,14 +116,166 @@ OnyxiaGold.Data.Transmutes = {
       { itemID = I.TITANIUM_BAR.id, count = 1 },
     },
     supportsTransmuteMastery = true,
-    requirements = {
-      profession = "Alchemy",
+    requirements = alchemyTool({
       -- 395 is the skill required to perform Transmute: Titanium (spell 60350).
       -- 440 is the difficulty colour (orange through grey), not the requirement.
+      -- Spell data shows no cooldown. Not part of transmute_20h.
       minimumSkill = 395,
       recipeSpellID = 60350,
-      specialisationOptional = "Transmutation",
-    },
+    }),
     notes = "Expected output is not guaranteed; Transmute Master is an EV modifier, not a craft gate",
+  },
+  {
+    id = "earthsiege_diamond",
+    name = "Earthsiege Diamond",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.DARK_JADE.id, count = 1 },
+      { itemID = I.HUGE_CITRINE.id, count = 1 },
+      { itemID = I.ETERNAL_FIRE.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.EARTHSIEGE_DIAMOND.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 425,
+      recipeSpellID = 57427,
+    }),
+    notes = "No cooldown in the 3.3.5 spell data. Transmute Master is expected value only.",
+  },
+  {
+    id = "skyflare_diamond",
+    name = "Skyflare Diamond",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.BLOODSTONE.id, count = 1 },
+      { itemID = I.CHALCEDONY.id, count = 1 },
+      { itemID = I.ETERNAL_AIR.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.SKYFLARE_DIAMOND.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 430,
+      recipeSpellID = 57425,
+    }),
+    notes = "Reagents are the verified 3.3.5 list. No cooldown in that spell data.",
+  },
+  {
+    id = "ametrine",
+    name = "Ametrine",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.MONARCH_TOPAZ.id, count = 1 },
+      { itemID = I.ETERNAL_SHADOW.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.AMETRINE.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 450,
+      recipeSpellID = 66658,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Shares the 20-hour transmute group. One cast from that group per plan.",
+  },
+  {
+    id = "kings_amber",
+    name = "King's Amber",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.AUTUMNS_GLOW.id, count = 1 },
+      { itemID = I.ETERNAL_LIFE.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.KINGS_AMBER.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 450,
+      recipeSpellID = 66660,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Shares the 20-hour transmute group. One cast from that group per plan.",
+  },
+  {
+    id = "dreadstone",
+    name = "Dreadstone",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.TWILIGHT_OPAL.id, count = 1 },
+      { itemID = I.ETERNAL_SHADOW.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.DREADSTONE.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 450,
+      recipeSpellID = 66662,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Shares the 20-hour transmute group. One cast from that group per plan.",
+  },
+  {
+    id = "majestic_zircon",
+    name = "Majestic Zircon",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.SKY_SAPPHIRE.id, count = 1 },
+      { itemID = I.ETERNAL_AIR.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.MAJESTIC_ZIRCON.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 450,
+      recipeSpellID = 66663,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Shares the 20-hour transmute group. One cast from that group per plan.",
+  },
+  {
+    id = "eye_of_zul",
+    name = "Eye of Zul",
+    typeLabel = "Transmute",
+    inputs = {
+      { itemID = I.FOREST_EMERALD.id, count = 3 },
+    },
+    outputs = {
+      { itemID = I.EYE_OF_ZUL.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 450,
+      recipeSpellID = 66664,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Three Forest Emeralds. Shares the 20-hour transmute group.",
+  },
+  {
+    -- Minimum skill is unset (yellow 440 versus the 450 quest tier). Do not guess.
+    id = "cardinal_ruby",
+    name = "Cardinal Ruby",
+    typeLabel = "Transmute",
+    skillUnset = true,
+    inputs = {
+      { itemID = I.SCARLET_RUBY.id, count = 1 },
+      { itemID = I.ETERNAL_FIRE.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.CARDINAL_RUBY.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      recipeSpellID = 66659,
+      skillUnset = true,
+      cooldown = "transmute_20h",
+    }),
+    notes = "Minimum skill is unset. Not an action.",
   },
 }

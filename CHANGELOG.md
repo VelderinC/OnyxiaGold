@@ -15,6 +15,7 @@ Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials
 - `SessionState` rebuilds on each plan. A selected action reserves its cash, the bag units it uses, and the auction units it would buy. The next action sees what remains, including output units already planned. The saved market snapshot is not modified.
 - Dream Shard combines one way: 3 Small Dream Shards into 1 Dream Shard. The addon does not recommend a split.
 - Prismatic shards stay a priced pair. They are not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented.
+- Epic gem transmutes share one `transmute_20h` cooldown per plan. Earthsiege and Skyflare are multi-input and are not on that cooldown. Cardinal Ruby is not an action because its minimum skill is unset. Philosopher's Stone is a tool, not a reagent. Transmute Master stays the 1.20 expectation only on transmutes that support it.
 
 ## 0.1.2 — Character State & Capital Awareness
 

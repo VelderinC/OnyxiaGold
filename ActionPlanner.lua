@@ -41,6 +41,42 @@ local function inputSpec(opp)
   return itemID, count
 end
 
+local function recipeInputs(opp)
+  if type(opp.inputs) == "table" and table.getn(opp.inputs) > 0 then
+    return opp.inputs
+  end
+  local itemID, count = inputSpec(opp)
+  if not itemID then
+    return {}
+  end
+  if count < 1 then
+    count = 1
+  end
+  return { { itemID = itemID, count = count } }
+end
+
+local function bagCount(itemID)
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() then
+    return session:GetBagCount(itemID) or 0
+  end
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
+    return OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID) or 0
+  end
+  return 0
+end
+
+local function coveredBuyout(itemID)
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() then
+    return session:CoveredQuantity(itemID) or 0
+  end
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
+    return OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
+  end
+  return 0
+end
+
 local function meetsThreshold(profit)
   local minAbs
   if OnyxiaGoldDB and OnyxiaGoldDB.settings then
@@ -96,37 +132,71 @@ local function cappedCrafts(opp, executable)
   return allowed, true
 end
 
+-- lines, cash, economicInput, ownedValue, complete
+-- Every input is costed. The stone tool is not an input and is not bought.
+local function planInputs(opp, crafts)
+  crafts = tonumber(crafts) or 0
+  local inputs = recipeInputs(opp)
+  if crafts <= 0 then
+    return {}, 0, 0, 0, true
+  end
+  if table.getn(inputs) < 1 then
+    return nil
+  end
+  local lines = {}
+  local cash = 0
+  local ownedValue = 0
+  for i = 1, table.getn(inputs) do
+    local row = inputs[i]
+    local itemID = tonumber(row.itemID)
+    local count = tonumber(row.count) or 1
+    if count < 1 then
+      count = 1
+    end
+    if not itemID then
+      return nil
+    end
+    local needed = crafts * count
+    local owned = bagCount(itemID)
+    if owned > needed then
+      owned = needed
+    end
+    if owned < 0 then
+      owned = 0
+    end
+    local toBuy = needed - owned
+    if toBuy > 0 then
+      local session = OnyxiaGold.SessionState
+      local part
+      if session and session.IsActive and session:IsActive() then
+        part = session:AcquisitionCost(itemID, toBuy)
+      else
+        part = OnyxiaGold.Prices:GetAcquisitionCost(itemID, toBuy)
+      end
+      if not part then
+        return nil
+      end
+      cash = cash + part
+    end
+    local unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
+    ownedValue = ownedValue + owned * unit
+    table.insert(lines, {
+      itemID = itemID,
+      count = count,
+      ownedUnits = owned,
+      buyUnits = toBuy,
+    })
+  end
+  return lines, cash, ownedValue + cash, ownedValue, true
+end
+
 -- cash, economicInput, ownedValue, complete
 local function craftCost(opp, crafts, owned)
-  local itemID, inCount = inputSpec(opp)
-  crafts = tonumber(crafts) or 0
-  if crafts <= 0 then
-    return 0, 0, 0, true
-  end
-  if not itemID then
+  local lines, cash, economic, ownedValue, complete = planInputs(opp, crafts)
+  if not lines then
     return nil, nil, nil, false
   end
-  local needed = crafts * inCount
-  local fromOwned = owned
-  if fromOwned > needed then
-    fromOwned = needed
-  end
-  local toBuy = needed - fromOwned
-  local cash = 0
-  if toBuy > 0 then
-    local session = OnyxiaGold.SessionState
-    if session and session.IsActive and session:IsActive() then
-      cash = session:AcquisitionCost(itemID, toBuy)
-    else
-      cash = OnyxiaGold.Prices:GetAcquisitionCost(itemID, toBuy)
-    end
-    if not cash then
-      return nil, nil, nil, false
-    end
-  end
-  local unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
-  local ownedValue = fromOwned * unit
-  return cash, ownedValue + cash, ownedValue, true
+  return cash, economic, ownedValue, complete
 end
 
 local function maxCraftsForCash(opp, owned, deployable, capMax)
@@ -150,17 +220,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   -- Otherwise this is Capital:GetSpendableAfterMail(), already reserve-adjusted,
   -- minus gold this session has already assigned.
   afterMailDeployable = tonumber(afterMailDeployable) or 0
-  local itemID, inCount = inputSpec(opp)
+  local inputs = recipeInputs(opp)
+  local itemID = inputs[1] and tonumber(inputs[1].itemID) or nil
+  local inCount = inputs[1] and (tonumber(inputs[1].count) or 1) or 1
+  if inCount < 1 then
+    inCount = 1
+  end
   local session = OnyxiaGold.SessionState
   local sessionOn = session and session.IsActive and session:IsActive()
-  local owned = 0
-  if itemID then
-    if sessionOn then
-      owned = session:GetBagCount(itemID)
-    elseif OnyxiaGold.Inventory then
-      owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID)
-    end
-  end
+  local owned = itemID and bagCount(itemID) or 0
   local cap = { executable = true }
   if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
     cap = OnyxiaGold.Capabilities:CanExecute(opp.requirements)
@@ -171,17 +239,23 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     marketProfitable = tonumber(opp.maxProfitableCrafts) or 0
   end
   -- Session planning buys from the remaining clone, not the full live book.
-  local buyoutQty = 0
-  if itemID then
-    if sessionOn then
-      buyoutQty = session:CoveredQuantity(itemID)
-    elseif OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
-      buyoutQty = OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
+  -- Physical crafts are limited by the scarcest input.
+  local physical = nil
+  for i = 1, table.getn(inputs) do
+    local row = inputs[i]
+    local id = tonumber(row.itemID)
+    local count = tonumber(row.count) or 1
+    if count < 1 then
+      count = 1
+    end
+    local have = id and ((bagCount(id) or 0) + coveredBuyout(id)) or 0
+    local craftsHere = math.floor(have / count)
+    if not physical or craftsHere < physical then
+      physical = craftsHere
     end
   end
-  local physical = 0
-  if inCount > 0 then
-    physical = math.floor(((owned or 0) + buyoutQty) / inCount)
+  if not physical then
+    physical = 0
   end
 
   -- Capability is not the same number as physical stock.
@@ -241,8 +315,10 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     if not profit then
       return false
     end
+    local lines = planInputs(opp, n)
     person.executableCrafts = n
     person.sensibleCrafts = n
+    person.inputLines = lines
     person.cashRequiredNow = cash
     person.economicInputValue = economic
     person.ownedInputValue = ownedValue
@@ -275,7 +351,13 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   end
 
   if not cap.executable then
-    if cap.unknownRecipe then
+    if cap.skillUnset then
+      person.state = "NOT_ACTIONABLE"
+      person.reason = cap.reason or "Skill requirement is unset"
+      person.capabilityAllowedCrafts = 0
+      person.executableCrafts = 0
+      person.sensibleCrafts = 0
+    elseif cap.unknownRecipe then
       person.state = "UNKNOWN_RECIPE_STATE"
     elseif cap.globalOnly or cap.personalState == "GLOBAL_ONLY" then
       person.state = "GLOBAL_ONLY"
@@ -407,14 +489,31 @@ local function actionFromPerson(person, index)
     detail = string.format("Use owned materials · %d crafts", crafts)
     name = "Use owned: " .. tostring(opp.name)
   else
-    local itemID = opp.inputItemIDs and opp.inputItemIDs[1]
-    local needBuy = crafts * (person.inputCount or 1) - (person.ownedInputs or 0)
-    if needBuy < 0 then
-      needBuy = 0
+    local bits = {}
+    local lines = person.inputLines
+    if type(lines) == "table" then
+      for i = 1, table.getn(lines) do
+        local buy = lines[i].buyUnits or 0
+        if buy > 0 then
+          local itemName = "materials"
+          if lines[i].itemID and OnyxiaGold.Data.GetItemName then
+            itemName = OnyxiaGold.Data.GetItemName(lines[i].itemID) or itemName
+          end
+          table.insert(bits, tostring(buy) .. " " .. itemName)
+        end
+      end
     end
-    local itemName = itemID and (OnyxiaGold.Data.GetItemName and OnyxiaGold.Data.GetItemName(itemID)) or "materials"
+    if table.getn(bits) == 0 then
+      local itemID = opp.inputItemIDs and opp.inputItemIDs[1]
+      local needBuy = crafts * (person.inputCount or 1) - (person.ownedInputs or 0)
+      if needBuy < 0 then
+        needBuy = 0
+      end
+      local itemName = itemID and (OnyxiaGold.Data.GetItemName and OnyxiaGold.Data.GetItemName(itemID)) or "materials"
+      table.insert(bits, tostring(needBuy) .. " " .. tostring(itemName))
+    end
     kind = "BUY_AND_CRAFT"
-    name = "Buy " .. tostring(needBuy) .. " " .. tostring(itemName)
+    name = "Buy " .. table.concat(bits, " + ")
     detail = string.format("Then %d %s", crafts, tostring(opp.name))
   end
 
@@ -442,21 +541,27 @@ function Planner:ReserveSelected(person)
     return true
   end
   local opp = person.opp or {}
-  local itemID = opp.inputItemIDs and opp.inputItemIDs[1]
   local crafts = person.sensibleCrafts or person.executableCrafts or 0
-  local inCount = tonumber(person.inputCount) or 1
-  if inCount < 1 then
-    inCount = 1
+  local lines = person.inputLines
+  if type(lines) ~= "table" or table.getn(lines) < 1 then
+    local itemID = opp.inputItemIDs and opp.inputItemIDs[1]
+    local inCount = tonumber(person.inputCount) or 1
+    if inCount < 1 then
+      inCount = 1
+    end
+    local needed = crafts * inCount
+    local fromOwned = person.ownedInputs or 0
+    if fromOwned > needed then
+      fromOwned = needed
+    end
+    if fromOwned < 0 then
+      fromOwned = 0
+    end
+    lines = {
+      { itemID = itemID, ownedUnits = fromOwned, buyUnits = needed - fromOwned },
+    }
   end
-  local needed = crafts * inCount
-  local fromOwned = person.ownedInputs or 0
-  if fromOwned > needed then
-    fromOwned = needed
-  end
-  if fromOwned < 0 then
-    fromOwned = 0
-  end
-  local toBuy = needed - fromOwned
+  local first = lines[1] or {}
   local cooldown = opp.requirements and opp.requirements.cooldown
   local outputID = opp.outputItemIDs and opp.outputItemIDs[1]
   local outputUnits = 0
@@ -464,10 +569,11 @@ function Planner:ReserveSelected(person)
     outputUnits = crafts * outputPerCraft(opp)
   end
   return session:Reserve({
-    itemID = itemID,
+    itemID = first.itemID,
     cash = person.cashRequiredNow or 0,
-    ownedUnits = fromOwned,
-    buyUnits = toBuy,
+    ownedUnits = first.ownedUnits or 0,
+    buyUnits = first.buyUnits or 0,
+    inputs = lines,
     cooldown = cooldown,
     outputItemID = outputID,
     outputUnits = outputUnits,

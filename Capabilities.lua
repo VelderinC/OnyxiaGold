@@ -459,6 +459,14 @@ function Cap:CanExecute(requirements)
     return result
   end
 
+  -- A blank skill is not zero. Do not treat an unset requirement as met.
+  if requirements.skillUnset then
+    result.executable = false
+    result.skillUnset = true
+    result.reason = "Skill requirement is unset"
+    return result
+  end
+
   if requirements.requiredClass then
     local classFile = OnyxiaGold.CharacterState and OnyxiaGold.CharacterState:ClassFile()
     if classFile and classFile ~= requirements.requiredClass then

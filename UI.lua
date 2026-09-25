@@ -1,6 +1,6 @@
 --[[
   OnyxiaGold.UI
-  Native 3.3.5a frames. No Ace3 or other addon dependencies.
+  Presentation only. Native 3.3.5a frames.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -9,29 +9,29 @@ OnyxiaGold.UI = OnyxiaGold.UI or {}
 local UI = OnyxiaGold.UI
 
 local FRAME_WIDTH = 760
-local FRAME_HEIGHT = 480
+local FRAME_HEIGHT = 500
 local NUM_ROWS = 14
 local ROW_HEIGHT = 18
-local HEADER_Y = -78
-local LIST_TOP = HEADER_Y - 22
+local HEADER_Y = -108
+local LIST_TOP = HEADER_Y - 20
 
 local COLS = {
-  { key = "name", label = "Opportunity", width = 230, justify = "LEFT" },
-  { key = "investment", label = "Investment", width = 120, justify = "RIGHT" },
-  { key = "profit", label = "Expected Profit", width = 130, justify = "RIGHT" },
-  { key = "roi", label = "ROI", width = 60, justify = "RIGHT" },
-  { key = "available", label = "Available", width = 80, justify = "RIGHT" },
+  { key = "name", label = "Opportunity", width = 220, justify = "LEFT" },
+  { key = "profit", label = "Profit", width = 110, justify = "RIGHT" },
+  { key = "total", label = "Potential", width = 110, justify = "RIGHT" },
+  { key = "roi", label = "ROI", width = 55, justify = "RIGHT" },
+  { key = "crafts", label = "Crafts", width = 70, justify = "RIGHT" },
   { key = "type", label = "Type", width = 80, justify = "LEFT" },
 }
 
-local function addLabel(parent, text, template, x, y, justify)
+local function addLabel(parent, text, template)
   local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlight")
-  fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
-  if justify then
-    fs:SetJustifyH(justify)
-  end
   fs:SetText(text or "")
   return fs
+end
+
+local function itemName(id)
+  return OnyxiaGold.Data.GetItemName(id) or ("item:" .. tostring(id))
 end
 
 function UI:Create()
@@ -66,9 +66,8 @@ function UI:Create()
   frame:Hide()
   tinsert(UISpecialFrames, "OnyxiaGoldFrame")
 
-  local title = addLabel(frame, "OnyxiaGold", "GameFontNormalLarge", 20, -16)
-  title:SetPoint("TOP", frame, "TOP", 0, -16)
-  title:SetPoint("LEFT", frame, "LEFT", 20, 0)
+  local title = addLabel(frame, "OnyxiaGold", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -16)
 
   local close = CreateFrame("Button", "OnyxiaGoldCloseButton", frame, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
@@ -82,21 +81,31 @@ function UI:Create()
     OnyxiaGold.Log:Toggle()
   end)
 
-  local scanBtn = CreateFrame("Button", "OnyxiaGoldScanButton", frame, "UIPanelButtonTemplate")
-  scanBtn:SetWidth(160)
-  scanBtn:SetHeight(24)
-  scanBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -44)
-  scanBtn:SetText("Scan Auction House")
-  scanBtn:SetScript("OnClick", function()
-    OnyxiaGold.Log:Debug("UI", "Scan button clicked")
-    OnyxiaGold.Scanner:Start()
+  local quickBtn = CreateFrame("Button", "OnyxiaGoldQuickScanButton", frame, "UIPanelButtonTemplate")
+  quickBtn:SetWidth(110)
+  quickBtn:SetHeight(24)
+  quickBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -44)
+  quickBtn:SetText("Quick Scan")
+  quickBtn:SetScript("OnClick", function()
+    OnyxiaGold.Log:Debug("UI", "Quick Scan clicked")
+    OnyxiaGold.Scanner:StartQuick()
+  end)
+
+  local fullBtn = CreateFrame("Button", "OnyxiaGoldFullScanButton", frame, "UIPanelButtonTemplate")
+  fullBtn:SetWidth(90)
+  fullBtn:SetHeight(24)
+  fullBtn:SetPoint("LEFT", quickBtn, "RIGHT", 6, 0)
+  fullBtn:SetText("Full Scan")
+  fullBtn:SetScript("OnClick", function()
+    OnyxiaGold.Log:Debug("UI", "Full Scan clicked")
+    OnyxiaGold.Scanner:StartFull()
   end)
 
   local refreshBtn = CreateFrame("Button", "OnyxiaGoldRefreshButton", frame, "UIPanelButtonTemplate")
-  refreshBtn:SetWidth(160)
+  refreshBtn:SetWidth(130)
   refreshBtn:SetHeight(24)
-  refreshBtn:SetPoint("LEFT", scanBtn, "RIGHT", 8, 0)
-  refreshBtn:SetText("Refresh Opportunities")
+  refreshBtn:SetPoint("LEFT", fullBtn, "RIGHT", 6, 0)
+  refreshBtn:SetText("Refresh")
   refreshBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Refresh opportunities clicked")
     OnyxiaGold.OpportunityEngine:Refresh()
@@ -105,7 +114,7 @@ function UI:Create()
   local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")
   master:SetWidth(24)
   master:SetHeight(24)
-  master:SetPoint("LEFT", refreshBtn, "RIGHT", 12, 0)
+  master:SetPoint("LEFT", refreshBtn, "RIGHT", 10, 0)
   local masterText = getglobal("OnyxiaGoldMasterCheckText")
   if masterText then
     masterText:SetText("Transmute Master")
@@ -117,10 +126,15 @@ function UI:Create()
     OnyxiaGold.OpportunityEngine:Refresh()
   end)
 
+  local market = addLabel(frame, "Market: —", "GameFontDisableSmall")
+  market:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -74)
+  market:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -74)
+  market:SetJustifyH("LEFT")
+
   local header = CreateFrame("Frame", "OnyxiaGoldHeader", frame)
   header:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, HEADER_Y)
   header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -36, HEADER_Y)
-  header:SetHeight(18)
+  header:SetHeight(16)
 
   local x = 0
   for i = 1, table.getn(COLS) do
@@ -135,16 +149,16 @@ function UI:Create()
 
   local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", frame, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, LIST_TOP)
-  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 48)
+  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 42)
   scroll.offset = 0
   scroll:EnableMouseWheel(1)
   scroll:SetScript("OnVerticalScroll", function(self, value)
-    -- 3.3.5a FauxScrollFrame_OnVerticalScroll still reads globals this/arg1.
-    this = self
-    arg1 = value
-    FauxScrollFrame_OnVerticalScroll(ROW_HEIGHT, function()
-      OnyxiaGold.UI:UpdateList()
-    end)
+    value = tonumber(value) or 0
+    self.offset = math.floor((value / ROW_HEIGHT) + 0.5)
+    if self.offset < 0 then
+      self.offset = 0
+    end
+    OnyxiaGold.UI:UpdateList()
   end)
   scroll:SetScript("OnMouseWheel", function(self, delta)
     local scrollbar = getglobal(self:GetName() .. "ScrollBar")
@@ -170,6 +184,13 @@ function UI:Create()
     end
     scrollbar:SetValue(newValue)
   end)
+  frame:EnableMouseWheel(1)
+  frame:SetScript("OnMouseWheel", function(_, delta)
+    local handler = scroll:GetScript("OnMouseWheel")
+    if handler then
+      handler(scroll, delta)
+    end
+  end)
 
   local rows = {}
   for i = 1, NUM_ROWS do
@@ -186,7 +207,7 @@ function UI:Create()
     if math.mod(i, 2) == 0 then
       local bg = row:CreateTexture(nil, "BACKGROUND")
       bg:SetAllPoints(row)
-      bg:SetTexture(1, 1, 1, 0.04)
+      bg:SetTexture(1, 1, 1, 0.035)
       row.bg = bg
     end
 
@@ -196,7 +217,7 @@ function UI:Create()
       local col = COLS[c]
       local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
       fs:SetPoint("LEFT", row, "LEFT", cx, 0)
-      fs:SetWidth(col.width)
+      fs:SetWidth(col.width - 4)
       fs:SetJustifyH(col.justify)
       fs:SetText("")
       row.cells[col.key] = fs
@@ -204,19 +225,7 @@ function UI:Create()
     end
 
     row:SetScript("OnEnter", function(self)
-      if not self.opp then
-        return
-      end
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetText(self.opp.name, 1, 0.82, 0)
-      if self.opp.notes and self.opp.notes ~= "" then
-        GameTooltip:AddLine(self.opp.notes, 0.9, 0.9, 0.9, 1)
-      end
-      GameTooltip:AddLine("Investment: " .. OnyxiaGold.FormatMoney(self.opp.investment), 1, 1, 1)
-      GameTooltip:AddLine("Gross: " .. OnyxiaGold.FormatMoney(self.opp.grossRevenue), 1, 1, 1)
-      GameTooltip:AddLine("Net after AH cut: " .. OnyxiaGold.FormatMoney(self.opp.netRevenue), 1, 1, 1)
-      GameTooltip:AddLine("Expected profit: " .. OnyxiaGold.FormatMoneySigned(self.opp.expectedProfit), 1, 1, 1)
-      GameTooltip:Show()
+      UI:ShowOpportunityTooltip(self)
     end)
     row:SetScript("OnLeave", function()
       GameTooltip:Hide()
@@ -225,19 +234,78 @@ function UI:Create()
     rows[i] = row
   end
 
-  local status = addLabel(frame, "Open the Auction House, then scan.", "GameFontDisable", 20, 0)
-  status:ClearAllPoints()
-  status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 18)
-  status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 18)
+  local status = addLabel(frame, "Open the Auction House, then Quick Scan.", "GameFontDisable")
+  status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 16)
+  status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 16)
   status:SetJustifyH("LEFT")
 
   self.frame = frame
-  self.scanButton = scanBtn
+  self.quickScanButton = quickBtn
+  self.fullScanButton = fullBtn
+  self.scanButton = quickBtn
   self.refreshButton = refreshBtn
   self.masterCheck = master
+  self.marketStatus = market
   self.scroll = scroll
   self.rows = rows
   self.status = status
+end
+
+function UI:ShowOpportunityTooltip(row)
+  local opp = row and row.opp
+  if not opp then
+    return
+  end
+  GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+  GameTooltip:SetText(opp.name or "Opportunity", 1, 0.82, 0)
+
+  if opp.inputItemIDs and opp.inputItemIDs[1] then
+    GameTooltip:AddLine("Input: " .. tostring(itemName(opp.inputItemIDs[1])), 0.8, 0.8, 0.8)
+  end
+  GameTooltip:AddLine("First craft acquisition: " .. OnyxiaGold.FormatMoney(opp.investment), 1, 1, 1)
+  if opp.expectedOutput and opp.expectedOutput ~= 1 then
+    GameTooltip:AddLine(string.format("Expected output: %.2f (EV, not guaranteed)", opp.expectedOutput), 1, 0.85, 0.4)
+  end
+  GameTooltip:AddLine("Expected net revenue: " .. OnyxiaGold.FormatMoney(opp.netRevenue), 1, 1, 1)
+  GameTooltip:AddLine("Profit / craft: " .. OnyxiaGold.FormatMoneySigned(opp.expectedProfit), 0.2, 1, 0.2)
+  GameTooltip:AddLine("Maximum profitable crafts: " .. tostring(opp.maxProfitableCrafts or 0), 1, 1, 1)
+  GameTooltip:AddLine("Estimated total potential: " .. OnyxiaGold.FormatMoneySigned(opp.totalExpectedProfit or 0), 0.2, 1, 0.2)
+  GameTooltip:AddLine("Potential is input-depth capped, not guaranteed sales.", 0.7, 0.7, 0.7)
+
+  GameTooltip:AddLine(" ", 1, 1, 1)
+  GameTooltip:AddLine("Input stock: " .. tostring(opp.inputMarketQuantity or 0) .. " buyout units", 0.8, 0.8, 0.8)
+  GameTooltip:AddLine("Output market: " .. tostring(opp.outputMarketQuantity or 0) .. " buyout units", 0.8, 0.8, 0.8)
+
+  if opp.inputItemIDs and opp.inputItemIDs[1] then
+    local id = opp.inputItemIDs[1]
+    GameTooltip:AddLine("Input P10 " .. OnyxiaGold.FormatMoney(OnyxiaGold.Prices:GetP10(id) or 0)
+      .. "  median " .. OnyxiaGold.FormatMoney(OnyxiaGold.Prices:GetMedian(id) or 0), 0.75, 0.75, 0.75)
+  end
+  if opp.outputItemIDs and opp.outputItemIDs[1] then
+    local id = opp.outputItemIDs[1]
+    GameTooltip:AddLine("Output P25 " .. OnyxiaGold.FormatMoney(OnyxiaGold.Prices:GetP25(id) or 0)
+      .. "  median " .. OnyxiaGold.FormatMoney(OnyxiaGold.Prices:GetMedian(id) or 0), 0.75, 0.75, 0.75)
+  end
+
+  if opp.oldestDataAge then
+    local stale = opp.oldestDataAge > (OnyxiaGold.Config.QuickScanStaleSeconds or 600)
+    local r, g, b = 0.7, 0.7, 0.7
+    if stale then
+      r, g, b = 1, 0.75, 0.2
+    end
+    GameTooltip:AddLine("Data age: " .. OnyxiaGold.FormatAge(opp.oldestDataAge), r, g, b)
+  end
+  if OnyxiaGold:IsTransmuteMaster() and opp.type == "TRANSMUTE" then
+    GameTooltip:AddLine("Transmute Master EV enabled", 1, 0.85, 0.4)
+  end
+  if opp.confidenceNotes and opp.confidenceNotes ~= "" then
+    GameTooltip:AddLine("Confidence " .. string.format("%.0f%%", (opp.confidence or 1) * 100)
+      .. " — " .. opp.confidenceNotes, 0.7, 0.7, 0.7, 1)
+  end
+  if opp.notes and opp.notes ~= "" then
+    GameTooltip:AddLine(opp.notes, 0.65, 0.65, 0.65, 1)
+  end
+  GameTooltip:Show()
 end
 
 function UI:SetStatus(text)
@@ -245,6 +313,18 @@ function UI:SetStatus(text)
     self:Create()
   end
   self.status:SetText(text or "")
+end
+
+function UI:RefreshMarketStatus()
+  if not self.marketStatus then
+    return
+  end
+  local label = OnyxiaGold.Database:FormatMarketLabel()
+  local quick = OnyxiaGold.Database:LastScanOfType("quick")
+  local full = OnyxiaGold.Database:LastScanOfType("full")
+  local q = quick and date("%H:%M:%S", quick.timestamp) or "—"
+  local f = full and date("%H:%M:%S", full.timestamp) or "—"
+  self.marketStatus:SetText(string.format("Market: %s    Quick: %s    Full: %s", label, q, f))
 end
 
 function UI:UpdateList()
@@ -263,10 +343,10 @@ function UI:UpdateList()
     if opp then
       row:Show()
       row.cells.name:SetText(opp.name or "")
-      row.cells.investment:SetText(OnyxiaGold.FormatMoney(opp.investment))
       row.cells.profit:SetText(OnyxiaGold.FormatMoneySigned(opp.expectedProfit))
+      row.cells.total:SetText(OnyxiaGold.FormatMoneySigned(opp.totalExpectedProfit or opp.expectedProfit))
       row.cells.roi:SetText(OnyxiaGold.FormatPercent(opp.roi))
-      row.cells.available:SetText(tostring(opp.availableQuantity or 0))
+      row.cells.crafts:SetText(tostring(opp.maxProfitableCrafts or opp.availableQuantity or 0))
       row.cells.type:SetText(opp.typeLabel or opp.type or "")
     else
       row:Hide()
@@ -286,26 +366,22 @@ function UI:Refresh()
     end
   end
 
+  self:RefreshMarketStatus()
+
   local results = OnyxiaGold.OpportunityEngine:GetResults()
   local n = table.getn(results)
-  local scanInfo = ""
-  if OnyxiaGoldDB and OnyxiaGoldDB.scans and table.getn(OnyxiaGoldDB.scans) > 0 then
-    local last = OnyxiaGoldDB.scans[table.getn(OnyxiaGoldDB.scans)]
-    if last and last.timestamp then
-      scanInfo = "Last scan " .. date("%H:%M:%S", last.timestamp) .. " · "
-    end
-  end
 
   if OnyxiaGold.Scanner:IsScanning() then
     -- Scanner owns the status line while a scan is in progress.
   elseif n == 0 then
-    if not OnyxiaGoldDB or not OnyxiaGoldDB.latest or not next(OnyxiaGoldDB.latest) then
-      self:SetStatus("No price data yet. Open the Auction House and click Scan Auction House.")
+    local market = OnyxiaGold.Database:GetMarket()
+    if not market or not market.latest or not next(market.latest) then
+      self:SetStatus("No price data yet. Open the Auction House and click Quick Scan.")
     else
-      self:SetStatus(scanInfo .. "No positive opportunities on the current scan.")
+      self:SetStatus("No positive opportunities on current market data.")
     end
   else
-    self:SetStatus(scanInfo .. tostring(n) .. " opportunities ranked by expected profit.")
+    self:SetStatus(tostring(n) .. " opportunities ranked by potential profit (input-depth cap).")
   end
 
   self:UpdateList()

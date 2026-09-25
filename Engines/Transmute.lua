@@ -1,6 +1,7 @@
 --[[
   Alchemy transmute engine.
-  v0.1: Saronite Bar x8 → Titanium Bar x1, with optional Transmute Master EV.
+  Depth-aware Saronite → Titanium. Sell side uses P25 (thin-market fallbacks).
+  Output absorption is not modelled; total potential is input-depth capped.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -9,44 +10,23 @@ OnyxiaGold.Engines.Transmute = OnyxiaGold.Engines.Transmute or {}
 
 local Transmute = OnyxiaGold.Engines.Transmute
 
-local function minAvailableCrafts(inputs)
-  local maxCrafts
-  local prices = OnyxiaGold.Prices
-  for i = 1, table.getn(inputs) do
-    local input = inputs[i]
-    local qty = prices:GetQuantity(input.itemID)
-    local crafts = math.floor(qty / input.count)
-    if not maxCrafts or crafts < maxCrafts then
-      maxCrafts = crafts
-    end
-  end
-  return maxCrafts or 0
-end
-
-local function inputCost(inputs)
-  local total = 0
-  local prices = OnyxiaGold.Prices
-  for i = 1, table.getn(inputs) do
-    local input = inputs[i]
-    -- GetAcquisitionCost is the extension point for depth-aware costing.
-    local cost = prices:GetAcquisitionCost(input.itemID, input.count)
-    if not cost then
-      return nil
-    end
-    total = total + cost
-  end
-  return total
-end
-
 function Transmute:Evaluate(def)
-  if not def or not def.inputs or not def.outputs then
+  if not def or type(def.inputs) ~= "table" or type(def.outputs) ~= "table" then
     OnyxiaGold.Log:Debug("Transmute", "skip invalid recipe")
     return nil
   end
+  if table.getn(def.inputs) < 1 or table.getn(def.outputs) < 1 then
+    return nil
+  end
 
-  local investment = inputCost(def.inputs)
-  if not investment or investment <= 0 then
-    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": missing input price")
+  -- v0.1.1: single-input transmutes. Multi-input depth walk comes later.
+  local input = def.inputs[1]
+  local output = def.outputs[1]
+  local inputID = tonumber(input and input.itemID)
+  local outputID = tonumber(output and output.itemID)
+  local inCount = tonumber(input and input.count) or 0
+  local outCount = tonumber(output and output.count) or 0
+  if not inputID or not outputID or inCount <= 0 or outCount <= 0 then
     return nil
   end
 
@@ -56,57 +36,89 @@ function Transmute:Evaluate(def)
   end
 
   local prices = OnyxiaGold.Prices
-  local expectedGross = 0
-  for i = 1, table.getn(def.outputs) do
-    local output = def.outputs[i]
-    local unit = prices:GetConservative(output.itemID)
-    if not unit then
-      OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": missing output price item=" .. tostring(output.itemID))
-      return nil
-    end
-    -- EV may be fractional (1.20); convert back to integer copper.
-    local evCount = output.count * expectedOutput
-    expectedGross = expectedGross + math.floor(unit * evCount + 0.5)
-  end
-
-  if expectedGross <= 0 then
-    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": expectedGross=0")
+  local saleUnit = prices:GetOpportunitySaleUnit(outputID)
+  if not saleUnit then
+    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": missing output price")
     return nil
   end
 
+  local expectedGross = math.floor(saleUnit * outCount * expectedOutput + 0.5)
+  if expectedGross <= 0 then
+    return nil
+  end
   local net = OnyxiaGold:ApplyAuctionHouseCut(expectedGross)
-  local profit = net - investment
-  if profit <= 0 then
+
+  local firstCost = prices:GetAcquisitionCost(inputID, inCount)
+  if not firstCost or firstCost <= 0 then
+    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": cannot fill first craft")
+    return nil
+  end
+
+  local firstProfit = net - firstCost
+  if firstProfit <= 0 then
     OnyxiaGold.Log:Debug("Transmute", string.format(
-      "skip %s: profit=%d investment=%d net=%d outputEV=%.2f master=%s",
-      tostring(def.name), profit, investment, net, expectedOutput, tostring(OnyxiaGold:IsTransmuteMaster())
+      "skip %s: first profit=%d cost=%d net=%d outputEV=%.2f",
+      tostring(def.name), firstProfit, firstCost, net, expectedOutput
     ))
     return nil
   end
 
-  local confidence = 1.0
-  if expectedOutput > 1.0 then
-    confidence = 0.9
+  local batch = prices:GetMaxProfitableBatches(inputID, inCount, net)
+  local crafts = batch and batch.batches or 1
+  local totalProfit = batch and batch.totalProfit or firstProfit
+  local avgProfit = crafts > 0 and math.floor(totalProfit / crafts) or firstProfit
+  local inputQty = prices:GetBuyoutQuantity(inputID)
+  local outputQty = prices:GetBuyoutQuantity(outputID)
+  local produced = crafts * outCount * expectedOutput
+  local share
+  if outputQty > 0 then
+    share = produced / outputQty
   end
 
-  local available = minAvailableCrafts(def.inputs)
+  local ages = OnyxiaGold.OpportunityEngine:OldestAge({ inputID, outputID })
+  local conf, confNotes = OnyxiaGold.OpportunityEngine:ComputeConfidence({
+    oldestDataAge = ages,
+    outputMarketQuantity = outputQty,
+    maxProfitableCrafts = crafts,
+    outputCount = outCount,
+    expectedOutput = expectedOutput,
+    hasDepth = prices:GetDepth(inputID) ~= nil,
+  })
+
+  local notes = def.notes or ""
+  notes = notes .. ". Sell-side uses P25 (fallback P10/min). Output market absorption is not modelled."
+
   OnyxiaGold.Log:Debug("Transmute", string.format(
-    "hit %s profit=%d roi=%.2f avail=%d outputEV=%.2f",
-    tostring(def.name), profit, profit / investment, available, expectedOutput
+    "hit %s first=%d total=%d crafts=%d avgIn=%s outputEV=%.2f",
+    tostring(def.name), firstProfit, totalProfit, crafts,
+    tostring(batch and batch.averageUnitCost), expectedOutput
   ))
 
   return OnyxiaGold.OpportunityEngine:New({
     type = "TRANSMUTE",
     typeLabel = def.typeLabel or "Transmute",
     name = def.name,
-    investment = investment,
+    investment = firstCost,
     grossRevenue = expectedGross,
     netRevenue = net,
-    expectedProfit = profit,
-    roi = profit / investment,
-    availableQuantity = available,
-    confidence = confidence,
-    notes = def.notes or "",
+    expectedProfit = firstProfit,
+    roi = firstProfit / firstCost,
+    availableQuantity = crafts,
+    maxProfitableCrafts = crafts,
+    totalExpectedProfit = totalProfit,
+    averageProfitPerCraft = avgProfit,
+    averageUnitCost = batch and batch.averageUnitCost,
+    inputMarketQuantity = inputQty,
+    outputMarketQuantity = outputQty,
+    marketShareAfterProduction = share,
+    confidence = conf,
+    confidenceNotes = confNotes,
+    notes = notes,
+    inputItemIDs = { inputID },
+    outputItemIDs = { outputID },
+    oldestDataAge = ages,
+    expectedOutput = expectedOutput,
+    saleUnit = saleUnit,
   })
 end
 
@@ -114,9 +126,13 @@ function Transmute:Collect()
   local out = {}
   local recipes = OnyxiaGold.Data.Transmutes or {}
   for i = 1, table.getn(recipes) do
-    local opp = self:Evaluate(recipes[i])
-    if opp then
+    local ok, opp = pcall(function()
+      return self:Evaluate(recipes[i])
+    end)
+    if ok and opp then
       table.insert(out, opp)
+    elseif not ok then
+      OnyxiaGold.Log:Error("Transmute", "evaluate error: " .. tostring(opp))
     end
   end
   return out

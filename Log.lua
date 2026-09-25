@@ -183,18 +183,23 @@ function Log:StartSession()
 
   if OnyxiaGoldDB then
     local latestCount = 0
-    if type(OnyxiaGoldDB.latest) == "table" then
-      for _ in pairs(OnyxiaGoldDB.latest) do
-        latestCount = latestCount + 1
+    local scanCount = 0
+    local marketKey = OnyxiaGold.Database and OnyxiaGold.Database:GetCurrentMarketKey() or "?"
+    if OnyxiaGold.Database then
+      local market = OnyxiaGold.Database:GetMarket()
+      if market and type(market.latest) == "table" then
+        for _ in pairs(market.latest) do
+          latestCount = latestCount + 1
+        end
+      end
+      if market and type(market.scans) == "table" then
+        scanCount = table.getn(market.scans)
       end
     end
-    local scanCount = 0
-    if type(OnyxiaGoldDB.scans) == "table" then
-      scanCount = table.getn(OnyxiaGoldDB.scans)
-    end
     self:Debug("Database", string.format(
-      "version=%s latestItems=%d scanSummaries=%d debug=%s transmuteMaster=%s ahCut=%.4f",
+      "version=%s market=%s latestItems=%d scanSummaries=%d debug=%s transmuteMaster=%s ahCut=%.4f",
       tostring(OnyxiaGoldDB.version),
+      tostring(marketKey),
       latestCount,
       scanCount,
       tostring(OnyxiaGoldDB.settings and OnyxiaGoldDB.settings.debug),
@@ -231,14 +236,18 @@ function Log:LogWatchedPrices()
       local rec = OnyxiaGold.Prices:GetRecord(def.id)
       if rec then
         self:Debug("Prices", string.format(
-          "%s id=%d min=%s med=%s mean=%s qty=%s auctions=%s",
+          "%s id=%d min=%s p25=%s med=%s totalQty=%s buyoutQty=%s bidOnlyQty=%s auctions=%s buyoutAuctions=%s depth=%s",
           def.name,
           def.id,
           tostring(rec.minUnitBuyout),
+          tostring(rec.p25UnitBuyout),
           tostring(rec.medianUnitBuyout),
-          tostring(rec.meanUnitBuyout),
-          tostring(rec.quantity),
-          tostring(rec.auctionCount)
+          tostring(rec.totalQuantity or rec.quantity),
+          tostring(rec.buyoutQuantity),
+          tostring(rec.bidOnlyQuantity),
+          tostring(rec.auctionCount),
+          tostring(rec.buyoutAuctionCount),
+          tostring(rec.depth and table.getn(rec.depth) or 0)
         ))
       else
         self:Debug("Prices", def.name .. " id=" .. tostring(def.id) .. " missing from latest scan")

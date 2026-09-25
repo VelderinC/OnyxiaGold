@@ -6,20 +6,23 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the most profitable legitimate action I can take right now?**
 
-Version **0.1.0** is a modular MVP. It scans, stores prices, finds a few deterministic arbitrage routes, ranks them, and shows them in a window. Later phases (disenchant EV, recursive crafting, liquidity, farm GPH, realised ledger) are intentionally not built yet.
+Version **0.1.1** makes the market-data layer trustworthy: buyout depth, quantity-weighted statistics, Quick/Full scan, and realm/faction partitioning. Phase 2 (disenchant) is not in this release.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, and does not use anything outside the WoW client.
 
-## Current MVP features
+GitHub: https://github.com/VelderinC/OnyxiaGold
 
-1. Page-by-page Auction House scan (3.3.5a `QueryAuctionItems`)
-2. SavedVariables price database with versioned schema
-3. Unit-price API (lowest, median, quantity, net sale value after AH cut)
-4. Essence conversion arbitrage (both directions)
-5. Shard conversion arbitrage (both directions)
-6. Saronite → Titanium transmute expected-value ranking
-7. Opportunity window with gold/silver/copper formatting
-8. Slash commands, persistent diagnostic log, and optional debug chat
+## Current features
+
+1. **Quick Scan** — name queries for a data-driven watchlist, then filter by item ID
+2. **Full Scan** — page-by-page browse of the entire AH
+3. Compact buyout **order book** per item (aggregated by unit price)
+4. **Depth-aware acquisition cost** (walks cheapest levels until the requested quantity is filled)
+5. Quantity-weighted P10 / P25 / median / P75 / mean
+6. Essence and shard conversion arbitrage (both directions)
+7. Saronite → Titanium transmute EV, with maximum profitable crafts from input depth
+8. Realm/faction market keys (`Onyxia|Horde`, `Onyxia|Alliance`)
+9. Stale-data age in tooltips; diagnostic log
 
 ## Installation
 
@@ -34,14 +37,13 @@ World of Warcraft/
 
 The folder that contains `OnyxiaGold.toc` must be named `OnyxiaGold`.
 
-Restart the client (or `/reload` after the files are already in AddOns). Enable **OnyxiaGold** on the character select AddOns list.
-
 ## Slash commands
 
 | Command | Action |
 | --- | --- |
 | `/og` or `/onyxiagold` | Toggle the main window |
-| `/og scan` | Start an Auction House scan (AH must be open) |
+| `/og scan` or `/og quick` | Quick Scan (watchlist) |
+| `/og full` | Full Scan (entire AH) |
 | `/og opportunities` | Recalculate and show opportunities |
 | `/og debug` | Toggle debug **chat** echo (the internal log always records) |
 | `/og log` | Toggle the copyable diagnostic log window |
@@ -49,90 +51,92 @@ Restart the client (or `/reload` after the files are already in AddOns). Enable 
 | `/og log clear` | Wipe the log buffer |
 | `/og reset` | Warn, then `/og reset confirm` to wipe **price** data (log is kept) |
 | `/og master` | Toggle Transmute Master expected-output multiplier |
+| `/og getall` | Toggle experimental getAll (off by default; Warmane untested) |
 
-## Sharing logs when something breaks
+## Quick Scan vs Full Scan
 
-The addon keeps a ring buffer of diagnostic lines in SavedVariables (last 800). Chat stays quiet during scans unless `/og debug` is on. The log still records.
+**Quick Scan** queries only `Data/Watchlist.lua` items by name, keeps paging until that name search is exhausted, then **filters every row by item ID**. It **updates only queried items** and never wipes the rest of the market snapshot.
 
-After a problem:
+**Full Scan** walks every browse page with an empty name query and **replaces** the current realm/faction `latest` snapshot.
 
-1. Click **Log** on the main window, or type `/og log`
-2. Click **Select All** (or `/og log copy`)
-3. Press Ctrl+C
-4. Paste the dump here
+Both require the Auction House window to be open. Closing the AH aborts without writing.
 
-A useful dump includes session start, scan page queries, watched item prices (Saronite, Titanium, essences, shards), and why each conversion was a hit or skip. `/reload` does **not** wipe the log.
+## Market depth and prices
+
+All money is **integer copper** (1 gold = 10000 copper).
+
+- `totalQuantity` — every listed unit, including bid-only
+- `buyoutQuantity` — units with a buyout (instant-buy stock)
+- `GetQuantity()` returns **buyoutQuantity** so acquisition math cannot count bid-only stock
+- `GetAcquisitionCost(id, n)` walks the sorted buyout book. It returns **nil** if buyout stock cannot fill `n`
+- `GetAcquisitionQuote` returns filled quantity, total/avg/marginal cost, and `complete`
+- Median / percentiles are **quantity-weighted** over compact depth levels, not “one vote per auction”
+- Opportunity **sell** unit is **P25**, falling back to P10 then minimum on thin books
+- `GetMarketReferencePrice` is the quantity-weighted median
+- `GetLiquidationPrice` is P10 (then P25, then min)
+
+AH cut is a single config (`0.05`) applied once to expected sale proceeds.
+
+## Database
+
+SavedVariables version **2**. Layout:
+
+```
+OnyxiaGoldDB.markets["Onyxia|Horde"] = {
+  latest = { [itemID] = record },  -- includes compact depth
+  history = { [itemID] = { stats... } },  -- no depth
+  scans = { summaries }
+}
+```
+
+v1 unpartitioned `latest`/`history`/`scans` are preserved as `pendingLegacy` and assigned to the current realm/faction on `PLAYER_LOGIN` if that market is still empty.
+
+History stores compact stats only (min, p10, p25, median, mean, p75, quantities). Depth is **not** copied into history.
+
+## UI
+
+Columns: Opportunity, Profit (first craft), Potential (input-depth total), ROI, Crafts, Type.
+
+Potential profit is **not guaranteed sales**. Tooltips show acquisition, P10/P25/median, stock, data age, and Transmute Master EV.
 
 ## Current supported transformations
 
 | Transformation | Notes |
 | --- | --- |
-| Greater Eternal Essence ↔ 3 Lesser Eternal Essence | Both directions |
+| Greater Eternal Essence ↔ 3 Lesser Eternal Essence | Both directions, depth-aware |
 | Greater Planar Essence ↔ 3 Lesser Planar Essence | Both directions |
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Both directions |
 | 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Both directions |
 | 3 Small Dream Shards ↔ 1 Dream Shard | Both directions |
-| 8 Saronite Bars → 1 Titanium Bar | Expected value; optional Transmute Master 1.20x |
+| 8 Saronite Bars → 1 Titanium Bar | EV; optional Transmute Master 1.20x |
 
-Only opportunities with **expected profit > 0** after a 5% Auction House cut are listed. v0.1 ranks by expected profit per conversion, not by gold per hour or market capacity.
-
-All money is stored and calculated as **integer copper** (1 gold = 10000 copper).
-
-## Development status
-
-**v0.1.0 — MVP.** Scan → price → opportunity → UI needs to prove reliable on Warmane Onyxia before Phase 2 work begins.
-
-Placeholder modules exist for Disenchant, Crafting, and Farming so later engines can plug into the same ranking list.
+Only opportunities with **first-craft expected profit > 0** after AH cut are listed. Ranking is by **totalExpectedProfit** (input-depth cap), then first-craft profit.
 
 ## Known limitations
 
-- Scanning requires the Auction House window to be open. That is a 3.3.5a client rule, not an addon bug.
-- The scan walks browse pages (50 listings each). A full AH pass takes time and temporarily takes over the browse list.
-- `getAll` full-AH dump is not used in v0.1 (bandwidth / disconnect risk, and some private servers behave differently).
-- Incomplete item cache can skip a few listings. The scanner retries the page a few times, then continues.
-- Buy cost uses the **lowest unit buyout**, not true market-depth cost. Selling uses **median** unit buyout, then AH cut.
-- Available quantity is “how many conversions the current AH stock could theoretically feed”. It does not estimate how many you can actually sell.
-- Transmute Master is a checkbox / saved setting. It is **not** detected from your profession specialisation.
-- Closing the AH mid-scan aborts without overwriting previous prices.
-- No buying, selling, posting, or profession-cast automation.
-- No disenchant tables, crafting graph, farm routes, or historical percentile math yet.
+- No realised sales velocity or dump-the-market absorption model
+- Sell side still uses a conservative unit (P25), not a walk of the output book
+- Transmute Master remains expected value, not a guaranteed extra bar
+- `getAll` is detected and logged but **not** used unless `/og getall` is turned on
+- 3.3.5a has no exact-match AH query; Quick Scan relies on name + item ID filter
+- Transmute Master is a checkbox, not detected from profession spec
+- No disenchant tables, recursive crafting, farm GPH, or automated buy/post
+- Neutral AH is not partitioned yet (player faction market only)
+
+## Sharing logs
+
+`/og log` → Select All → Ctrl+C. `/reload` does not wipe the log. `/og reset` wipes prices, not the log.
 
 ## Future roadmap
 
-1. **Phase 2** — Disenchant expected value (iLevel, armour vs weapon, quality, RNG)
-2. **Phase 3** — Recursive crafting graph (cheapest source of every intermediate)
-3. **Phase 4** — Multiple exit values and an economic floor
-4. **Phase 5** — Historical prices (7/30-day median, percentiles, volatility)
-5. **Phase 6** — Realised sales ledger and true g/h
+1. **Phase 2** — Disenchant expected value
+2. **Phase 3** — Recursive crafting graph
+3. **Phase 4** — Multiple exit values / economic floor
+4. **Phase 5** — Historical percentiles and volatility
+5. **Phase 6** — Realised sales ledger
 6. **Phase 7** — Liquidity and market-capacity caps
 7. **Phase 8** — Farm route valuation
 8. **Phase 9** — Ranked “make me gold” action list
-
-## File layout
-
-```
-OnyxiaGold/
-  OnyxiaGold.toc
-  Core.lua
-  Database.lua
-  Scanner.lua
-  Prices.lua
-  OpportunityEngine.lua
-  UI.lua
-  Engines/
-    Essence.lua
-    Shards.lua
-    Transmute.lua
-    Disenchant.lua
-    Crafting.lua
-    Farming.lua
-  Data/
-    Recipes.lua
-    DisenchantTables.lua
-    ItemGroups.lua
-    OnyxiaOverrides.lua
-  README.md
-```
 
 ## Author
 

@@ -32,6 +32,15 @@ local Items = {
   -- WotLK bars
   SARONITE_BAR = { id = 36913, name = "Saronite Bar" },
   TITANIUM_BAR = { id = 41163, name = "Titanium Bar" },
+
+  -- Upcoming economic materials (watchlist / later engines)
+  NETHERWEAVE_CLOTH = { id = 21877, name = "Netherweave Cloth" },
+  BOLT_OF_NETHERWEAVE = { id = 21840, name = "Bolt of Netherweave" },
+  ARCANE_DUST = { id = 22445, name = "Arcane Dust" },
+  MAGEWEAVE_CLOTH = { id = 4338, name = "Mageweave Cloth" },
+  VISION_DUST = { id = 11137, name = "Vision Dust" },
+  INFINITE_DUST = { id = 34054, name = "Infinite Dust" },
+  ABYSS_CRYSTAL = { id = 34057, name = "Abyss Crystal" },
 }
 
 OnyxiaGold.Data.Items = Items

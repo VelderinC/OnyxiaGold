@@ -5,8 +5,8 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.0"
-OnyxiaGold.DB_VERSION = 1
+OnyxiaGold.Version = "0.1.1"
+OnyxiaGold.DB_VERSION = 2
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
 OnyxiaGold.Engines = OnyxiaGold.Engines or {}
@@ -26,6 +26,13 @@ OnyxiaGold.Config = {
   MaxHistoryPoints = 30,
   MaxScanSummaries = 20,
   MaxLogLines = 800,
+  -- Compact buyout book: cheapest levels are kept if a cap is hit.
+  MaxDepthLevelsPerItem = 100,
+  -- Data older than this is flagged stale (opportunities still calculate).
+  QuickScanStaleSeconds = 600,
+  FullScanStaleSeconds = 3600,
+  -- Experimental. Warmane getAll is untested; leave false.
+  useGetAll = false,
 }
 
 local COPPER_PER_SILVER = 100
@@ -109,6 +116,25 @@ function OnyxiaGold.FormatPercent(ratio)
   return string.format("%d%%", math.floor(ratio * 100 + 0.5))
 end
 
+function OnyxiaGold.FormatAge(seconds)
+  seconds = tonumber(seconds) or 0
+  if seconds < 0 then
+    seconds = 0
+  end
+  seconds = math.floor(seconds + 0.5)
+  if seconds < 60 then
+    return tostring(seconds) .. "s"
+  end
+  local m = math.floor(seconds / 60)
+  local s = math.mod(seconds, 60)
+  if m < 60 then
+    return string.format("%dm %ds", m, s)
+  end
+  local h = math.floor(m / 60)
+  m = math.mod(m, 60)
+  return string.format("%dh %dm", h, m)
+end
+
 -- 3.3.5a item links: |Hitem:itemId:enchant:gem1:gem2:gem3:gem4:suffix:uniqueId:level|h[name]|h|r
 function OnyxiaGold.ParseItemID(link)
   if type(link) ~= "string" then
@@ -184,8 +210,10 @@ function OnyxiaGold:HandleSlash(msg)
   end
   if msg == "" then
     self.UI:Toggle()
-  elseif msg == "scan" then
-    self.Scanner:Start()
+  elseif msg == "scan" or msg == "quick" then
+    self.Scanner:StartQuick()
+  elseif msg == "full" then
+    self.Scanner:StartFull()
   elseif msg == "opportunities" or msg == "opp" then
     self.OpportunityEngine:Refresh()
     self.UI:Show()
@@ -197,6 +225,11 @@ function OnyxiaGold:HandleSlash(msg)
       rest = string.sub(msg, 5)
     end
     self.Log:HandleSlash(rest)
+  elseif msg == "getall" then
+    OnyxiaGold.Database:Ensure()
+    local on = not OnyxiaGoldDB.settings.useGetAll
+    OnyxiaGoldDB.settings.useGetAll = on
+    self:Print("Experimental getAll is " .. (on and "ON" or "OFF") .. ". Full Scan still pages unless you start a getAll scan. Warmane behaviour is untested.")
   elseif msg == "reset" then
     self:Print("This will wipe price data (the log is kept). Type |cffffff00/og reset confirm|r to proceed.")
   elseif msg == "reset confirm" then
@@ -212,7 +245,7 @@ function OnyxiaGold:HandleSlash(msg)
     end
     self.OpportunityEngine:Refresh()
   else
-    self:Print("Commands: /og, /og scan, /og opportunities, /og debug, /og log, /og reset, /og master")
+    self:Print("Commands: /og, /og scan, /og full, /og opportunities, /og debug, /og log, /og reset, /og master")
   end
 end
 
@@ -233,6 +266,9 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     end
     OnyxiaGold:Debug("Addon loaded, database version " .. tostring(OnyxiaGoldDB.version), "Database")
   elseif event == "PLAYER_LOGIN" then
+    if OnyxiaGold.Database and OnyxiaGold.Database.BindCurrentMarket then
+      OnyxiaGold.Database:BindCurrentMarket()
+    end
     if OnyxiaGold.Data.ApplyOnyxiaOverrides then
       OnyxiaGold.Data.ApplyOnyxiaOverrides()
     end

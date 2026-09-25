@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 — Log clock crash
+
+- Replace `math.mod` with the Lua 5.1 `%` operator so logging no longer crashes on Warmane 3.3.5.
+
 ## 0.1.5 — Version watermark
 
 - Always-visible top-left watermark shows OnyxiaGold and the TOC version.

@@ -40,7 +40,7 @@ end
 
 local function clockStamp()
   local clock = date("%H:%M:%S")
-  local frac = math.floor(math.mod(GetTime() * 10, 10))
+  local frac = math.floor((GetTime() * 10) % 10)
   return string.format("%s.%d", clock, frac)
 end
 

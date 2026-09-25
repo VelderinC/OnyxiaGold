@@ -1,0 +1,8 @@
+# Local / editor junk
+.DS_Store
+Thumbs.db
+*.bak
+*.log
+
+# Do not commit WoW saved-variable dumps if they land here
+WTF/

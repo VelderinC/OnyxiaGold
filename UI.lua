@@ -48,10 +48,22 @@ local function itemName(id)
   return OnyxiaGold.Data.GetItemName(id) or ("item:" .. tostring(id))
 end
 
--- Buy, convert, and post stay one action. The row says all three.
+local function isBuyKind(action)
+  local kind = action and action.kind
+  return kind == "BUY" or kind == "BUY_AND_CRAFT"
+end
+
+-- A session step already says the one thing to do. A combined buy row
+-- still names the buy, the craft, and the post.
 local function actionInstruction(action)
-  if not action or action.kind ~= "BUY_AND_CRAFT" then
-    return action and action.name or ""
+  if not action then
+    return ""
+  end
+  if action.sessionStep then
+    return action.name or ""
+  end
+  if action.kind ~= "BUY_AND_CRAFT" then
+    return action.name or ""
   end
   local buy = action.name or "Buy"
   local opp = action.sourceOpp
@@ -809,9 +821,19 @@ function UI:Create()
   listTitle:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 10, -6)
   listTitle:SetHeight(14)
 
+  local nextAction = addLabel(listPanel, "", "GameFontHighlightSmall")
+  nextAction:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 10, -20)
+  nextAction:SetPoint("TOPRIGHT", listPanel, "TOPRIGHT", -12, -20)
+  nextAction:SetHeight(32)
+  nextAction:SetJustifyH("LEFT")
+  nextAction:SetJustifyV("TOP")
+  nextAction:SetWordWrap(true)
+  nextAction:SetNonSpaceWrap(false)
+  setRGB(nextAction, 0.95, 0.9, 0.75)
+
   local header = CreateFrame("Frame", "OnyxiaGoldHeader", listPanel)
-  header:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 8, -24)
-  header:SetPoint("TOPRIGHT", listPanel, "TOPRIGHT", -26, -24)
+  header:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 8, -52)
+  header:SetPoint("TOPRIGHT", listPanel, "TOPRIGHT", -26, -52)
   header:SetHeight(16)
 
   local headerCells = {}
@@ -835,7 +857,7 @@ function UI:Create()
   headerRule:SetTexture(0.85, 0.68, 0.25, 0.85)
 
   local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", listPanel, "FauxScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 4, -42)
+  scroll:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 4, -70)
   scroll:SetPoint("BOTTOMRIGHT", listPanel, "BOTTOMRIGHT", -4, 24)
   scroll.offset = 0
   scroll:EnableMouseWheel(1)
@@ -1035,6 +1057,7 @@ function UI:Create()
   self.header = header
   self.headerCells = headerCells
   self.listTitle = listTitle
+  self.nextAction = nextAction
   self.heldButton = heldBtn
   self.listMode = "actions"
   self:LayoutColumns()
@@ -1328,8 +1351,10 @@ function UI:ShowActionTooltip(row)
     end
   elseif action.kind == "COLLECT_MAIL" then
     GameTooltip:AddLine("Visit a mailbox and collect gold. The addon will not loot mail.", 1, 0.85, 0.4, 1)
-  elseif action.kind == "BUY_AND_CRAFT" then
+  elseif action.kind == "BUY" or action.kind == "BUY_AND_CRAFT" then
     GameTooltip:AddLine("Click the row to search the Auction House. Buy purchases one listing at or under the stop.", 1, 0.85, 0.4, 1)
+  elseif action.kind == "CRAFT" and action.sessionStep then
+    GameTooltip:AddLine("Open the profession window, then craft this yourself.", 1, 0.85, 0.4, 1)
   elseif action.kind == "POST" then
     GameTooltip:AddLine("Post lists one stack. Open the Auction House, then click Post.", 1, 0.85, 0.4, 1)
   else
@@ -1549,7 +1574,7 @@ end
 function UI:BuyStateText(state)
   local status = state and state.status
   if status == "closed" then
-    return "Auction House is closed."
+    return "Open the Auction House."
   elseif status == "search" then
     local name = state.name
     if name and name ~= "" then
@@ -1584,7 +1609,7 @@ function UI:PaintBuyRow(row, action)
   if button then
     button:Hide()
   end
-  if not action or action.kind ~= "BUY_AND_CRAFT" then
+  if not isBuyKind(action) then
     return
   end
   local stop = OnyxiaGold.AuctionStop
@@ -1606,7 +1631,7 @@ end
 
 function UI:OnActionClick(row)
   local action = row and row.action
-  if not action or action.kind ~= "BUY_AND_CRAFT" then
+  if not isBuyKind(action) then
     return
   end
   if OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.RequestBuy then
@@ -1619,7 +1644,7 @@ end
 function UI:OnBuyClick(row)
   local action = row and row.action
   local stop = OnyxiaGold.AuctionStop
-  if not action or action.kind ~= "BUY_AND_CRAFT" or not stop or not stop.LiveBid then
+  if not isBuyKind(action) or not stop or not stop.LiveBid then
     return
   end
   if stop.buyActionIndex ~= action.index then
@@ -1974,10 +1999,33 @@ function UI:UpdateInventoryList()
   end
 end
 
+function UI:PaintSessionLine()
+  local label = self.nextAction
+  if not label then
+    return
+  end
+  if self.listMode == "inventory" then
+    label:SetText("")
+    return
+  end
+  local session
+  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetSession then
+    session = OnyxiaGold.ActionPlanner:GetSession()
+  end
+  local line = session and session.nextLine or ""
+  local summary = session and session.summaryLine or ""
+  if line ~= "" and summary ~= "" then
+    label:SetText(line .. " " .. summary)
+  else
+    label:SetText(line or "")
+  end
+end
+
 function UI:UpdateList()
   if not self.rows then
     return
   end
+  self:PaintSessionLine()
   self:LayoutColumns()
   paintHeaders(self)
   if self.listMode == "inventory" then
@@ -2136,7 +2184,17 @@ function UI:Refresh()
         end
         self:SetStatus(table.concat(bits, ". ") .. "." .. (hint and ("  " .. hint) or ""))
       else
-        self:SetStatus(tostring(real) .. " personal actions from current capital." .. extra)
+        local session = OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetSession and OnyxiaGold.ActionPlanner:GetSession()
+        local steps = session and tonumber(session.activeSteps) or 0
+        if steps > 0 then
+          local word = "steps"
+          if steps == 1 then
+            word = "step"
+          end
+          self:SetStatus(tostring(steps) .. " " .. word .. " in this session." .. extra)
+        else
+          self:SetStatus(tostring(real) .. " personal actions from current capital." .. extra)
+        end
       end
     end
   end

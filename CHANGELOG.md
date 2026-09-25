@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.32 — One ordered session
+
+- What to do now is one session in the order it happens: buy the whole lots, then craft, then post the output. The line at the top names the next action, the most it can spend or how many items, and the profit of that session.
+- A later sale is not cash for an earlier buy. Buy and Post stay on the step that needs a click. If the Auction House or the profession window is closed, the row names that window and does not click it for you.
+
 ## 0.1.31 — Known recipe book
 
 - Opening Alchemy or Enchanting saves every recipe that window shows: spell, reagents, counts, output, and a cooldown when the client returns one. The book stays until that window is opened again.

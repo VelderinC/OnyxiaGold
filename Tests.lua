@@ -718,6 +718,176 @@ function Tests:Run()
     and cooldown.crafts[1].name == "Gem"
     and Session:CooldownUsed("transmute_20h"))
 
+  -- A lot a little under P25 does not survive the cut and the deposit.
+  -- A lot that does is a flip: buy, then post. It shares the session with
+  -- a craft only when they do not need the same gold, and it does not take
+  -- a lot that craft already reserved.
+  local function flipLevels(price)
+    return {
+      { p = price, q = 20, n = 1, s = 20 },
+      { p = 10000, q = 80, n = 4, s = 20 },
+    }
+  end
+  local slight = Lots.FlipMargin({
+    levels = flipLevels(9600),
+    covered = 100,
+    deposit = 10000,
+    cutBPS = 500,
+    name = "Ore",
+    itemID = 9,
+  })
+  local thin = Lots.FlipMargin({
+    levels = {
+      { p = 1000, q = 20, n = 1, s = 20 },
+      { p = 10000, q = 20, n = 1, s = 20 },
+    },
+    covered = 40,
+    deposit = 100,
+    cutBPS = 500,
+  })
+  local oneOther = Lots.FlipMargin({
+    levels = {
+      { p = 1000, q = 10, n = 1, s = 10 },
+      { p = 10000, q = 100, n = 1, s = 100 },
+    },
+    covered = 110,
+    deposit = 100,
+    cutBPS = 500,
+  })
+  local cleared = Lots.FlipMargin({
+    levels = flipLevels(5000),
+    covered = 100,
+    deposit = 10000,
+    cutBPS = 500,
+    name = "Ore",
+    itemID = 9,
+  })
+  local undercut = Lots.FlipMargin({
+    levels = flipLevels(5000),
+    covered = 100,
+    deposit = 10000,
+    cutBPS = 500,
+    ownMinimum = 10001,
+  })
+  local outside = Lots.FlipMargin({
+    levels = flipLevels(5000),
+    covered = 100,
+    deposit = 10000,
+    external = true,
+  })
+  local broken = Lots.FlipMargin({
+    levels = flipLevels(5000),
+    covered = 100,
+    deposit = 10000,
+    disenchant = true,
+  })
+  local flipCandidate = {
+    kind = "flip",
+    itemID = 9,
+    name = "Ore",
+    deposit = 10000,
+    cutBPS = 500,
+  }
+  local craftCandidate = {
+    name = "Bar",
+    output = "Bar",
+    profit = 70000,
+    net = 150000,
+    crafts = 1,
+    profession = "Alchemy",
+    reagents = { { itemID = 3, count = 8, name = "Herb" } },
+  }
+  local function flipResources(purse)
+    return {
+      cash = purse,
+      depth = {
+        [9] = { levels = flipLevels(5000), covered = 100 },
+        [3] = { levels = { { p = 10000, q = 10, n = 1, s = 10 } }, covered = 10 },
+      },
+    }
+  end
+  local sharedGold = Plan.Portfolio({ flipCandidate, craftCandidate }, flipResources(300000))
+  local sameGold = Plan.Portfolio({ flipCandidate, craftCandidate }, flipResources(150000))
+  local sharedSteps = sharedGold and sharedGold.steps or {}
+  local sharedRoles = {}
+  for i = 1, nitems(sharedSteps) do
+    table.insert(sharedRoles, sharedSteps[i].role or "")
+  end
+  local sameSteps = sameGold and sameGold.steps or {}
+  local sameHasCraft = false
+  for i = 1, nitems(sameSteps) do
+    if sameSteps[i].role == "craft" then
+      sameHasCraft = true
+    end
+  end
+  local reservedLot = Plan.Portfolio({
+    flipCandidate,
+    {
+      name = "Bar",
+      output = "Bar",
+      profit = 500000,
+      net = 300000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = { { itemID = 9, count = 8, name = "Ore" } },
+    },
+  }, {
+    cash = 500000,
+    depth = {
+      [9] = { levels = flipLevels(5000), covered = 100 },
+    },
+  })
+  local reservedBuys = 0
+  local reservedSteps = reservedLot and reservedLot.steps or {}
+  for i = 1, nitems(reservedSteps) do
+    if reservedSteps[i].role == "buy" then
+      reservedBuys = reservedBuys + 1
+    end
+  end
+  check("a flip clears the cut and the deposit, and shares gold only when both fit",
+    not slight
+    and not thin
+    and not oneOther
+    and not undercut
+    and not outside
+    and not broken
+    and Lots.DepositCopper(1000, 20, 24) == 6000
+    and Lots.DepositCopper(0, 20, 24) == 100
+    and not Lots.DepositCopper(nil, 20, 24)
+    and cleared
+    and cleared.profit == 80000
+    and cleared.cash == 100000
+    and cleared.deposit == 10000
+    and cleared.count == 20
+    and cleared.saleUnit == 10000
+    and sharedGold
+    and nitems(sharedGold.flips) == 1
+    and nitems(sharedGold.crafts) == 1
+    and sharedGold.flips[1].name == "Ore"
+    and sharedGold.crafts[1].name == "Bar"
+    and sharedGold.profit == 150000
+    and sharedGold.spent == 210000
+    and sharedGold.purse == 90000
+    and table.concat(sharedRoles, ",") == "buy,post,buy,craft,post"
+    and sharedSteps[1].flip
+    and sharedSteps[1].name == "Ore"
+    and sharedSteps[2].role == "post"
+    and string.find(sharedSteps[2].line or "", "Deposit 1g", 1, true)
+    and string.find(sharedGold.nextLine or "", "Buy 20 Ore. Maximum spend 10g. Expected session profit +15g.", 1, true)
+    and not string.find(sharedGold.nextLine or "", "Craft", 1, true)
+    and sameGold
+    and nitems(sameGold.flips) == 1
+    and nitems(sameGold.crafts) == 0
+    and not sameHasCraft
+    and sameGold.spent == 110000
+    and sameGold.purse == 40000
+    and string.find(sameGold.nextLine or "", "Buy 20 Ore. Maximum spend 10g. Expected session profit +8g.", 1, true)
+    and reservedLot
+    and nitems(reservedLot.flips) == 0
+    and nitems(reservedLot.crafts) == 1
+    and reservedBuys == 1
+    and reservedLot.spent == 100000)
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.34 — Direct flips
+
+- A flip buys one whole auction lot and posts it. It is not a craft. It is included only when the resale at the P25 of the rest of the book still clears the auction-house cut and the deposit, and that lot is less than a quarter of the book with at least two auctions left. It does not undercut your own auction, spend a later sale, or take a lot a craft already reserved.
+
 ## 0.1.33 — Several crafts in one session
 
 - What to do now can hold more than one craft when they do not need the same gold, the same bag slots, the same auction lots, or the same cooldown. Each craft stays in its own order: buy the whole lots, then craft, then post.

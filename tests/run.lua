@@ -23,6 +23,7 @@ local function load(path)
   chunk()
 end
 
+load("Prices.lua")
 load("Lots.lua")
 load("Data/ItemGroups.lua")
 load("Data/Recipes.lua")

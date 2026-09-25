@@ -759,6 +759,24 @@ local function costOfCount(itemID, count)
 end
 
 function Stop:Bind(action)
+  if action and action.flip then
+    local itemID = tonumber(action.buyItemID)
+    local name = action.queryName or action.sortName or ""
+    local count = tonumber(action.flipCount) or 0
+    local stopUnit = tonumber(action.stopUnit) or 0
+    self.postCopper = nil
+    self.postLine = nil
+    self.postDecision = nil
+    if not itemID or name == "" or count < 1 or stopUnit < 1 then
+      return false
+    end
+    self.itemID = itemID
+    self.queryName = name
+    self.remaining = count
+    self.recipeCount = count
+    self.stopUnit = stopUnit
+    return true
+  end
   self.postCopper = nil
   self.postLine = nil
   self.postDecision = nil

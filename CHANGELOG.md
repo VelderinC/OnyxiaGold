@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.33 — Several crafts in one session
+
+- What to do now can hold more than one craft when they do not need the same gold, the same bag slots, the same auction lots, or the same cooldown. Each craft stays in its own order: buy the whole lots, then craft, then post.
+- The line at the top is still the single next step. Expected session profit is the sum of those crafts. A later sale is not cash for a buy. Leftover units from a whole lot stay available, so two crafts that need one listing buy it once. A 20-hour transmute still uses the cooldown once.
+
 ## 0.1.32 — One ordered session
 
 - What to do now is one session in the order it happens: buy the whole lots, then craft, then post the output. The line at the top names the next action, the most it can spend or how many items, and the profit of that session.

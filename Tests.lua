@@ -486,6 +486,238 @@ function Tests:Run()
     and closed.spent == 200000
     and closed.purse == 300000)
 
+  -- Two crafts, no shared listing. Loss is priced and then dropped because
+  -- its own marginal profit is not positive. Twice stops at one craft.
+  local both = Plan.Portfolio({
+    {
+      name = "Thin",
+      output = "Thin Bar",
+      profit = 60000,
+      net = 100000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = { { itemID = 2, count = 8, name = "Herb" } },
+    },
+    {
+      name = "Rich",
+      output = "Rich Bar",
+      profit = 120000,
+      net = 200000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = { { itemID = 1, count = 8, name = "Ore" } },
+    },
+    {
+      name = "Loss",
+      output = "Loss",
+      profit = 1,
+      net = 1,
+      crafts = 1,
+      reagents = { { itemID = 3, count = 8, name = "Dust" } },
+    },
+    {
+      name = "Twice",
+      output = "Twice",
+      profit = 4200,
+      net = 5000,
+      crafts = 2,
+      reagents = { { itemID = 4, count = 8, name = "Twice Reagent" } },
+    },
+  }, {
+    cash = 1000000,
+    depth = {
+      [1] = { levels = { { p = 10000, q = 10, n = 1, s = 10 } }, covered = 10 },
+      [2] = { levels = { { p = 5000, q = 10, n = 1, s = 10 } }, covered = 10 },
+      [3] = { levels = { { p = 10000, q = 10, n = 1, s = 10 } }, covered = 10 },
+      [4] = {
+        levels = {
+          { p = 100, q = 8, n = 1, s = 8 },
+          { p = 10000, q = 8, n = 1, s = 8 },
+        },
+        covered = 16,
+      },
+    },
+  })
+  local bothSteps = both and both.steps or {}
+  local bothRoles = {}
+  local bothNames = {}
+  local twiceBuy = 0
+  for i = 1, nitems(bothSteps) do
+    local step = bothSteps[i]
+    table.insert(bothRoles, step.role or "")
+    table.insert(bothNames, step.name or "")
+    if step.role == "buy" and step.itemID == 4 then
+      twiceBuy = step.count or 0
+    end
+  end
+  local bothLine = both and both.nextLine or ""
+  check("two crafts that share no lots appear in profit order",
+    both
+    and nitems(both.crafts) == 3
+    and both.crafts[1].name == "Rich Bar"
+    and both.crafts[2].name == "Thin Bar"
+    and both.crafts[3].name == "Twice"
+    and both.crafts[3].crafts == 1
+    and both.profit == 184200
+    and both.spent == 150800
+    and both.purse == 849200
+    and table.concat(bothRoles, ",") == "buy,craft,post,buy,craft,post,buy,craft,post"
+    and bothNames[1] == "Ore"
+    and bothNames[2] == "Rich Bar"
+    and bothNames[4] == "Herb"
+    and bothNames[5] == "Thin Bar"
+    and twiceBuy == 8
+    and not string.find(table.concat(bothNames, " "), "Loss", 1, true)
+    and string.find(bothLine, "Buy 10 Ore. Maximum spend 10g. Expected session profit +18g 42s.", 1, true)
+    and not string.find(bothLine, "Herb", 1, true)
+    and not string.find(bothLine, "Craft", 1, true))
+
+  local shared = Plan.Portfolio({
+    {
+      name = "Steel",
+      output = "Steel",
+      profit = 120000,
+      net = 200000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = { { itemID = 7, count = 8, name = "Saronite" } },
+    },
+    {
+      name = "Titanium",
+      output = "Titanium",
+      profit = 420000,
+      net = 500000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = { { itemID = 7, count = 8, name = "Saronite" } },
+    },
+  }, {
+    cash = 1000000,
+    depth = {
+      [7] = { levels = { { p = 10000, q = 20, n = 1, s = 20 } }, covered = 20 },
+    },
+  })
+  local sharedBuys = 0
+  local sharedBuyCount = 0
+  local sharedCrafts = {}
+  local sharedSteps = shared and shared.steps or {}
+  for i = 1, nitems(sharedSteps) do
+    local step = sharedSteps[i]
+    if step.role == "buy" and step.itemID == 7 then
+      sharedBuys = sharedBuys + 1
+      sharedBuyCount = step.count or 0
+    elseif step.role == "craft" then
+      table.insert(sharedCrafts, step.name or "")
+    end
+  end
+  local sharedLine = shared and shared.nextLine or ""
+  check("two crafts that need the same listing buy it once",
+    shared
+    and sharedBuys == 1
+    and sharedBuyCount == 20
+    and shared.spent == 200000
+    and shared.purse == 800000
+    and shared.profit == 540000
+    and nitems(shared.crafts) == 2
+    and sharedCrafts[1] == "Titanium"
+    and sharedCrafts[2] == "Steel"
+    and string.find(sharedLine, "Buy 20 Saronite. Maximum spend 20g. Expected session profit +54g.", 1, true)
+    and not string.find(sharedLine, "Craft", 1, true))
+
+  local shortPurse = Plan.Portfolio({
+    {
+      name = "Rich",
+      output = "Rich Bar",
+      profit = 120000,
+      net = 200000,
+      crafts = 1,
+      reagents = { { itemID = 1, count = 8, name = "Ore" } },
+    },
+    {
+      name = "Thin",
+      output = "Thin Bar",
+      profit = 60000,
+      net = 100000,
+      crafts = 1,
+      reagents = { { itemID = 2, count = 8, name = "Herb" } },
+    },
+  }, {
+    cash = 120000,
+    depth = {
+      [1] = { levels = { { p = 10000, q = 10, n = 1, s = 10 } }, covered = 10 },
+      [2] = { levels = { { p = 5000, q = 10, n = 1, s = 10 } }, covered = 10 },
+    },
+  })
+  check("a later sale is not cash for the next buy",
+    shortPurse
+    and nitems(shortPurse.crafts) == 1
+    and shortPurse.crafts[1].name == "Rich Bar"
+    and shortPurse.spent == 100000
+    and shortPurse.purse == 20000)
+
+  local crowded = Plan.Portfolio({
+    {
+      name = "First",
+      output = "First",
+      profit = 100000,
+      net = 200000,
+      crafts = 1,
+      reagents = { { itemID = 41, count = 8, name = "First Reagent" } },
+    },
+    {
+      name = "Second",
+      output = "Second",
+      profit = 50000,
+      net = 100000,
+      crafts = 1,
+      reagents = { { itemID = 42, count = 8, name = "Second Reagent" } },
+    },
+  }, {
+    cash = 1000000,
+    freeSlots = 1,
+    stackSize = { [41] = 20, [42] = 20 },
+    depth = {
+      [41] = { levels = { { p = 1000, q = 20, n = 1, s = 20 } }, covered = 20 },
+      [42] = { levels = { { p = 1000, q = 20, n = 1, s = 20 } }, covered = 20 },
+    },
+  })
+  check("two crafts that need the same bag slot do not both buy",
+    crowded
+    and nitems(crowded.crafts) == 1
+    and crowded.crafts[1].name == "First")
+
+  local cooldown = Plan.Portfolio({
+    {
+      name = "Metal",
+      output = "Metal",
+      profit = 40000,
+      net = 50000,
+      crafts = 1,
+      cooldown = "transmute_20h",
+      reagents = { { itemID = 32, count = 1, name = "Ore" } },
+    },
+    {
+      name = "Gem",
+      output = "Gem",
+      profit = 50000,
+      net = 60000,
+      crafts = 1,
+      cooldown = "transmute_20h",
+      reagents = { { itemID = 31, count = 1, name = "Green" } },
+    },
+  }, {
+    cash = 1000000,
+    depth = {
+      [31] = { levels = { { p = 1000, q = 1, n = 1, s = 1 } }, covered = 1 },
+      [32] = { levels = { { p = 1000, q = 1, n = 1, s = 1 } }, covered = 1 },
+    },
+  })
+  check("the 20-hour transmute occupies the cooldown once",
+    cooldown
+    and nitems(cooldown.crafts) == 1
+    and cooldown.crafts[1].name == "Gem"
+    and Session:CooldownUsed("transmute_20h"))
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

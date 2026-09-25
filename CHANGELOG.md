@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18 — Owned disenchant
+
+- A bag item with a known yield can be disenchanted when that beats its vendor value. Rares become one shard. Epics at item level 200–277 become one Abyss Crystal. Set green brackets use the minimum quantity. Nothing is bought.
+- Item levels 166 and 167, Northrend uncommon rates, and Abyssal Shatter stay out. The 0.5% crystal is not added. Equipped gear is not a row. A skill gap returns no row.
+
 ## 0.1.17 — Skill 1 actions
 
 - Magic, Astral, Mystic, and Nether essence pairs are item-use conversions. They need no profession and no skill, so they can be the next row at Alchemy 1 and Enchanting 1.

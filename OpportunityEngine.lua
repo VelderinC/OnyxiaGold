@@ -57,6 +57,11 @@ local function newOpportunity(fields)
     forgoneLine = fields.forgoneLine,
     sharedCooldownRow = fields.sharedCooldownRow and true or false,
     cooldownDecision = fields.cooldownDecision,
+    ownedOnly = fields.ownedOnly and true or false,
+    saleExitUnknown = fields.saleExitUnknown and true or false,
+    vendorUnit = fields.vendorUnit,
+    itemLevel = fields.itemLevel,
+    quality = fields.quality,
   }
 end
 

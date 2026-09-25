@@ -6,6 +6,8 @@
   ActionPlanner asks whether THIS character can and should do it now.
 
   Greedy on current deployable gold only. Expected sales are never cash.
+  The visible list is one session for the chosen craft: buy the whole lots,
+  then craft, then post. A later sale is not spent on an earlier buy.
   Owned bag materials reduce cashRequiredNow but keep economic opportunity cost.
   Post-mail deployable comes from Capital:GetSpendableAfterMail(), which
   reserves against liquid + claimable mail.
@@ -1433,6 +1435,296 @@ local function dropCoveredHoldRows(actions, posting)
   return kept
 end
 
+local function auctionHouseShown()
+  return AuctionFrame and AuctionFrame.IsShown and AuctionFrame:IsShown() and true or false
+end
+
+local function professionShown(name)
+  if type(name) ~= "string" or name == "" then
+    return false
+  end
+  if not TradeSkillFrame or not TradeSkillFrame.IsShown or not TradeSkillFrame:IsShown() then
+    return false
+  end
+  if type(GetTradeSkillLine) ~= "function" then
+    return false
+  end
+  local skillName = GetTradeSkillLine()
+  return skillName == name
+end
+
+local function craftProfession(action)
+  local opp = action and action.sourceOpp
+  local req = opp and opp.requirements
+  if type(req) == "table" then
+    local name = req.profession
+    if name == "Alchemy" or name == "Enchanting" then
+      return name
+    end
+  end
+  local label = action and action.typeLabel
+  if label == "Alchemy" or label == "Enchanting" then
+    return label
+  end
+  if opp and (opp.typeLabel == "Alchemy" or opp.typeLabel == "Enchanting") then
+    return opp.typeLabel
+  end
+  return nil
+end
+
+local function outputItemName(action)
+  local opp = action and action.sourceOpp
+  local itemID = opp and opp.outputItemIDs and tonumber(opp.outputItemIDs[1])
+  if itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+    local name = OnyxiaGold.Data.GetItemName(itemID)
+    if type(name) == "string" and name ~= "" then
+      return name
+    end
+  end
+  if opp and type(opp.name) == "string" and opp.name ~= "" then
+    return opp.name
+  end
+  return "item"
+end
+
+local function fillSessionPost(action, step)
+  local info = action.breakdown or {}
+  local itemID = tonumber(step.itemID) or tonumber(info.outputItemID)
+  local count = tonumber(step.count) or tonumber(info.postUnits) or 0
+  local saleUnit = tonumber(info.saleUnit)
+  if not itemID or count < 1 or not saleUnit or saleUnit <= 0 then
+    return false
+  end
+  local stack = clickStackSize(itemID, count)
+  local heldUnit = saleUnit
+  if OnyxiaGold.Prices and OnyxiaGold.Prices.GetLiquidationPrice then
+    local liquid = OnyxiaGold.Prices:GetLiquidationPrice(itemID)
+    if liquid and liquid > 0 then
+      heldUnit = liquid
+    end
+  end
+  local age = OnyxiaGold.Prices and OnyxiaGold.Prices.GetAge and OnyxiaGold.Prices:GetAge(itemID)
+  local stale = true
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.IsStale then
+    stale = OnyxiaGold.Lots.IsStale(age, OnyxiaGold.Config and OnyxiaGold.Config.QuickScanStaleSeconds)
+  end
+  local record = OnyxiaGold.Prices and OnyxiaGold.Prices.GetRecord and OnyxiaGold.Prices:GetRecord(itemID)
+  local external = record and record.source == "external"
+  local marketMin = OnyxiaGold.Prices and OnyxiaGold.Prices.GetMarketMinimum and OnyxiaGold.Prices:GetMarketMinimum(itemID)
+  local ownMin = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
+    and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
+  local floorUnit = saleUnit
+  if OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.PostFloorUnit then
+    floorUnit = OnyxiaGold.AuctionStop.PostFloorUnit(heldUnit, 1, 0)
+  end
+  local fresh = not stale and not external
+  local policy = OnyxiaGold.Lots and OnyxiaGold.Lots.PostPolicy and OnyxiaGold.Lots.PostPolicy({
+    economicFloor = floorUnit,
+    marketMinimum = marketMin,
+    ownMinimum = ownMin,
+    stackSize = stack,
+    stale = stale,
+    external = external and true or false,
+    liveValidated = fresh,
+  })
+  local postUnit = saleUnit
+  if policy and policy.targetPrice and policy.decision ~= "needs_validation" then
+    postUnit = policy.targetPrice
+  end
+  local cutBPS = 500
+  if OnyxiaGold.GetAuctionHouseCutBPS then
+    cutBPS = OnyxiaGold:GetAuctionHouseCutBPS()
+  end
+  local economics = OnyxiaGold.Lots and OnyxiaGold.Lots.PostEconomics
+    and OnyxiaGold.Lots.PostEconomics(postUnit, stack, heldUnit, cutBPS)
+  local gross = economics and economics.stackBuyout or math.floor(postUnit * stack + 0.5)
+  local net = economics and economics.expectedRevenue or gross
+  local bagCount = 0
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
+    bagCount = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID) or 0
+  end
+  step.post = {
+    outputItemID = itemID,
+    bagCount = bagCount,
+    postCount = count,
+    stackSize = stack,
+    saleUnit = postUnit,
+    stackBuyout = gross,
+    bid = gross,
+    buyout = gross,
+    duration = 2,
+    expectedRevenue = net,
+    cashReleased = net,
+    inventoryValue = economics and economics.inventoryValue or (heldUnit * stack),
+    expectedProfit = economics and economics.expectedProfit or 0,
+    snapshotAge = age,
+    postStale = stale and true or false,
+    postExternal = external and true or false,
+    economicFloor = floorUnit,
+    marketMinimum = marketMin,
+    ownMinimum = ownMin,
+    deposit = nil,
+  }
+  return true
+end
+
+local function actionFromStep(step, parent, first)
+  local row = {
+    sessionStep = step.role,
+    name = step.line or step.name,
+    cashRequiredNow = 0,
+    crafts = tonumber(step.count) or 0,
+    state = parent.state,
+    detail = step.windowHint or parent.detail,
+    confidence = parent.confidence,
+    sourceOpp = parent.sourceOpp,
+    person = parent.person,
+    buyItemID = step.itemID,
+    typeLabel = parent.typeLabel,
+    expectedProfit = 0,
+  }
+  if first then
+    row.expectedProfit = parent.expectedProfit or 0
+  end
+  if step.role == "buy" then
+    row.kind = "BUY"
+    row.typeLabel = "Buy"
+    row.cashRequiredNow = tonumber(step.cash) or 0
+    row.detail = "Whole auction lots. Leftover units stay in the plan. Fund this buy from gold in hand."
+    if (tonumber(step.excessUnits) or 0) > 0 then
+      row.detail = string.format(
+        "Leftover %d. Whole auction lots. Fund this buy from gold in hand.",
+        step.excessUnits
+      )
+    end
+  elseif step.role == "post" then
+    row.kind = "POST"
+    row.typeLabel = "Post"
+    local post = step.post or {}
+    for key, value in pairs(post) do
+      row[key] = value
+    end
+    row.kind = "POST"
+    row.sessionStep = "post"
+    row.name = step.line or row.name
+    row.cashRequiredNow = 0
+    row.detail = step.windowHint or "Post lists one stack."
+  else
+    row.kind = "CRAFT"
+    row.typeLabel = step.profession or parent.typeLabel or "Craft"
+    row.cashRequiredNow = 0
+  end
+  return row
+end
+
+-- The chosen craft becomes one session. Other crafts stay off the list
+-- so the player is not left to sequence them. Previews stay after it.
+function Planner:OrderSession(deployable)
+  local Plan = OnyxiaGold.SessionPlan
+  if not Plan or not Plan.Present or not Plan.StepsFromAction then
+    return nil
+  end
+  local actions = self.actions or {}
+  local chosen
+  for i = 1, table.getn(actions) do
+    local action = actions[i]
+    local kind = action and action.kind
+    local crafts = tonumber(action and action.crafts) or 0
+    if crafts > 0 and (kind == "BUY_AND_CRAFT" or kind == "CRAFT" or kind == "CRAFT_OWNED") then
+      chosen = action
+      break
+    end
+  end
+  if not chosen then
+    local post
+    for i = 1, table.getn(actions) do
+      local action = actions[i]
+      local kind = action and action.kind
+      if kind == "POST" then
+        post = action
+        break
+      end
+      if kind ~= "SKILL_PREVIEW" and kind ~= "GOLD_PREVIEW" and kind ~= "COLLECT_MAIL" then
+        break
+      end
+    end
+    if not post then
+      return nil
+    end
+    local houseOpen = auctionHouseShown()
+    if not houseOpen then
+      local name = post.name or ""
+      if not string.find(name, "Open the Auction House.", 1, true) then
+        post.name = name .. " Open the Auction House."
+      end
+    end
+    local count = tonumber(post.postCount) or tonumber(post.stackSize) or tonumber(post.crafts) or 0
+    local itemName = post.sortName or "item"
+    local profit = tonumber(post.expectedProfit) or 0
+    local nextLine = Plan.NextLine({ role = "post", count = count, name = itemName }, profit)
+    if nextLine and not houseOpen then
+      nextLine = nextLine .. " Open the Auction House."
+    end
+    local summary = "Capital deployed 0c. 1 step."
+    return {
+      nextLine = nextLine,
+      summaryLine = summary,
+      profit = profit,
+      capitalDeployed = 0,
+      activeSteps = 1,
+      steps = { post },
+    }
+  end
+  local names = {
+    output = outputItemName(chosen),
+    profession = craftProfession(chosen),
+  }
+  local lines = chosen.person and chosen.person.inputLines
+  if type(lines) == "table" then
+    for i = 1, table.getn(lines) do
+      local itemID = tonumber(lines[i] and lines[i].itemID)
+      if itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+        local name = OnyxiaGold.Data.GetItemName(itemID)
+        if type(name) == "string" and name ~= "" then
+          names[itemID] = name
+        end
+      end
+    end
+  end
+  local steps = Plan.StepsFromAction(chosen, names)
+  local kept = {}
+  for i = 1, table.getn(steps) do
+    local step = steps[i]
+    if step.role ~= "post" or fillSessionPost(chosen, step) then
+      table.insert(kept, step)
+    end
+  end
+  local purse = tonumber(deployable) or 0
+  local plan = Plan.Present({
+    cash = purse,
+    profit = chosen.expectedProfit or 0,
+    saleProceeds = chosen.breakdown and chosen.breakdown.proceeds or 0,
+    auctionOpen = auctionHouseShown(),
+    professionOpen = professionShown(names.profession),
+    steps = kept,
+  })
+  if not plan or table.getn(plan.steps or {}) < 1 then
+    return nil
+  end
+  local rows = {}
+  for i = 1, table.getn(plan.steps) do
+    table.insert(rows, actionFromStep(plan.steps[i], chosen, i == 1))
+  end
+  for i = 1, table.getn(actions) do
+    local kind = actions[i] and actions[i].kind
+    if kind == "SKILL_PREVIEW" or kind == "GOLD_PREVIEW" then
+      table.insert(rows, actions[i])
+    end
+  end
+  self.actions = rows
+  return plan
+end
+
 function Planner:Refresh()
   self.actions = {}
   self.locked = {}
@@ -1778,6 +2070,8 @@ function Planner:Refresh()
     end
   end
 
+  local sessionView = self:OrderSession(deployable)
+
   for i = 1, table.getn(self.actions) do
     self.actions[i].index = i
   end
@@ -1792,6 +2086,11 @@ function Planner:Refresh()
     claimable = claimable,
     pending = OnyxiaGold.Capital and OnyxiaGold.Capital:GetPendingAuctionGold() or 0,
     unknownRecipes = 0,
+    nextLine = sessionView and sessionView.nextLine or nil,
+    summaryLine = sessionView and sessionView.summaryLine or nil,
+    expectedProfit = sessionView and sessionView.profit or nil,
+    capitalDeployed = sessionView and sessionView.capitalDeployed or nil,
+    activeSteps = sessionView and sessionView.activeSteps or nil,
   }
   for i = 1, table.getn(self.locked) do
     if self.locked[i].state == "UNKNOWN_RECIPE_STATE" then

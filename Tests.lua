@@ -385,6 +385,107 @@ function Tests:Run()
     and staticRecipe and not staticPlan
     and waiting and not cooling)
 
+  -- Two steps. Step two's sale is 90g. The purse is 50g and the buy is a
+  -- whole lot of 20 for 20g, not the 8 units the craft consumes. That sale
+  -- must not become cash for the buy. 10g cannot fund the 20g buy either.
+  local Plan = OnyxiaGold.SessionPlan
+  local sessionAction = {
+    kind = "BUY_AND_CRAFT",
+    crafts = 1,
+    cashRequiredNow = 200000,
+    expectedProfit = 310000,
+    person = {
+      inputLines = {
+        {
+          itemID = 1,
+          buyUnits = 8,
+          purchasedUnits = 20,
+          buyCost = 200000,
+          excessUnits = 12,
+        },
+      },
+    },
+    breakdown = { proceeds = 900000 },
+  }
+  local sessionNames = { [1] = "Saronite Bar", output = "Titanium Bar" }
+  local sessionSteps = Plan.StepsFromAction(sessionAction, sessionNames)
+  local session = Plan.Present({
+    cash = 500000,
+    profit = 310000,
+    saleProceeds = 900000,
+    steps = sessionSteps,
+  })
+  local shortSession = Plan.Present({
+    cash = 100000,
+    profit = 310000,
+    saleProceeds = 900000,
+    steps = Plan.StepsFromAction(sessionAction, sessionNames),
+  })
+  local reversed = Plan.Present({
+    cash = 500000,
+    profit = 310000,
+    saleProceeds = 900000,
+    steps = {
+      { role = "craft", name = "Titanium Bar", count = 1, proceeds = 900000 },
+      { role = "buy", name = "Saronite Bar", count = 20, cash = 200000 },
+    },
+  })
+  local nextLine = session.nextLine or ""
+  local buyAt = string.find(nextLine, "Buy", 1, true)
+  local craftAt = string.find(nextLine, "Craft", 1, true)
+  local spoken = (session.steps[1] and session.steps[1].line or "")
+    .. " " .. (session.steps[2] and session.steps[2].line or "")
+  local spokenBuy = string.find(spoken, "Buy", 1, true)
+  local spokenCraft = string.find(spoken, "Craft", 1, true)
+  check("two-step session does not spend the later sale on the buy",
+    nitems(sessionSteps) == 2
+    and session.spent == 200000
+    and session.purse == 300000
+    and session.capitalDeployed == 200000
+    and nitems(session.steps) == 2
+    and session.steps[1].role == "buy"
+    and session.steps[1].count == 20
+    and session.steps[1].excessUnits == 12
+    and session.steps[2].role == "craft"
+    and session.steps[2].count == 1
+    and buyAt == 1
+    and not craftAt
+    and spokenBuy
+    and spokenCraft
+    and spokenBuy < spokenCraft
+    and string.find(nextLine, "Buy 20 Saronite Bar. Maximum spend 20g. Expected session profit +31g.", 1, true)
+    and shortSession.spent == 0
+    and shortSession.purse == 100000
+    and nitems(shortSession.steps) == 0
+    and not shortSession.nextLine
+    and reversed.steps[1].role == "buy"
+    and reversed.steps[2].role == "craft"
+    and string.find(reversed.nextLine or "", "Buy", 1, true) == 1
+    and reversed.purse == 300000)
+
+  local closed = Plan.Present({
+    cash = 500000,
+    profit = 310000,
+    auctionOpen = false,
+    professionOpen = false,
+    steps = {
+      { role = "buy", name = "Saronite Bar", count = 20, cash = 200000 },
+      { role = "craft", name = "Titanium Bar", count = 1, profession = "Alchemy" },
+      { role = "post", name = "Titanium Bar", count = 1, cash = 0, proceeds = 900000 },
+    },
+  })
+  check("closed auction and profession windows are named",
+    closed.steps[1].role == "buy"
+    and closed.steps[2].role == "craft"
+    and closed.steps[3].role == "post"
+    and string.find(closed.steps[1].line, "Open the Auction House.", 1, true)
+    and string.find(closed.steps[2].line, "Open Alchemy.", 1, true)
+    and string.find(closed.steps[3].line, "Open the Auction House.", 1, true)
+    and string.find(closed.nextLine or "", "Buy 20 Saronite Bar", 1, true)
+    and string.find(closed.nextLine or "", "Open the Auction House.", 1, true)
+    and closed.spent == 200000
+    and closed.purse == 300000)
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

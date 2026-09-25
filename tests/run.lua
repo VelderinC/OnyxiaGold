@@ -28,6 +28,7 @@ load("Data/ItemGroups.lua")
 load("Data/Recipes.lua")
 load("SessionState.lua")
 load("RecipeBook.lua")
+load("SessionPlan.lua")
 load("Tests.lua")
 
 local text, ok = OnyxiaGold.Tests:Run()

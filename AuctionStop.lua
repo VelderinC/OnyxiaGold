@@ -578,8 +578,13 @@ function Stop:OnBuyList()
   self:ReadBuyPage()
 end
 
+local function buyKind(action)
+  local kind = action and action.kind
+  return kind == "BUY" or kind == "BUY_AND_CRAFT"
+end
+
 function Stop:RowState(action)
-  if not action or action.kind ~= "BUY_AND_CRAFT" then
+  if not buyKind(action) then
     return nil
   end
   if action.index ~= self.buyActionIndex or not self.buyStatus then
@@ -593,7 +598,7 @@ function Stop:RowState(action)
 end
 
 function Stop:RequestBuy(action)
-  if not action or action.kind ~= "BUY_AND_CRAFT" then
+  if not buyKind(action) then
     return
   end
   self.buyActionIndex = action.index
@@ -763,11 +768,14 @@ function Stop:Bind(action)
   if not person or not opp or type(lines) ~= "table" then
     return false
   end
+  local want = tonumber(action.buyItemID)
   local focus
   for i = 1, table.getn(lines) do
     local line = lines[i]
     if line and (line.buyUnits or 0) > 0 and not focus then
-      focus = line
+      if not want or tonumber(line.itemID) == want then
+        focus = line
+      end
     end
   end
   if not focus then

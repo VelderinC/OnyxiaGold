@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 — Factory Operations, Phase A
+
+Foundational planner and snapshot corrections. Session reservation, Factory Mail, and Factory Inventory are not in this version.
+
+- Transmute: Titanium (spell 60350) requires Alchemy 395. 440 is difficulty colour, not the skill requirement.
+- Min, P10, P25, median, P75, and weighted mean are computed from the full runtime buyout book. Only the persisted acquisition depth is truncated. `depthCoveredQuantity` is stored separately from `buyoutQuantity`. `GetAcquisitionQuote` will not price past covered depth.
+- `Capital:GetSpendableAfterMail()` reserves against liquid + claimable mail. Liquid 100g, reserve 10%, mail 900g → 900g deployable after collection, not 990g.
+- Known recipes are profession-scoped. A complete profession scan replaces that profession's set. Saved flat sets migrate (database v4).
+- A mailbox with unloaded mail persists `snapshotComplete = false` plus `visibleCount` and `totalCount`. The UI does not present that subtotal as exact.
+- Own auctions persist `shown`, `total`, and `complete` (`shown >= total`). An incomplete owner list shows Listed as approximate.
+- Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`. `sensibleCrafts` does not yet apply an output-liquidity model.
+
 ## 0.1.2 — Character State & Capital Awareness
 
 - Personal economic state: liquid gold, mail ready, pending AH invoices, listed auctions, bag/bank materials

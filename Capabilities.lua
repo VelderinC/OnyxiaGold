@@ -166,6 +166,7 @@ local function isHeaderSkill(skillType, isExpanded)
   return skillType == "header"
 end
 
+-- Returns the previous collapsed-header map, and whether every header expanded.
 local function expandAllHeaders()
   local collapsed = {}
   local n = GetNumTradeSkills() or 0
@@ -186,13 +187,15 @@ local function expandAllHeaders()
       if isHeaderSkill(skillType) and not truthy(isExpanded) then
         if ExpandTradeSkillHeader then
           ExpandTradeSkillHeader(i)
+        else
+          return collapsed, false
         end
         changed = true
         break
       end
     end
   end
-  return collapsed
+  return collapsed, not changed
 end
 
 local function restoreHeaders(collapsed)
@@ -238,8 +241,23 @@ function Cap:ScanOpenTradeSkill()
   end
   self.scanInProgress = true
   local key = professionKeyFromSkillName(skillName) or skillName
-  local collapsed = expandAllHeaders()
+  local collapsed, expanded = expandAllHeaders()
+  if not expanded then
+    restoreHeaders(collapsed)
+    self.scanInProgress = false
+    if GetTime then
+      self.suppressTradeUntil = GetTime() + 1.25
+    end
+    OnyxiaGold.Log:Warn("Capabilities", "Recipe scan incomplete for " .. tostring(key) .. "; previous snapshot kept")
+    return
+  end
+  OnyxiaGold.Database:MigrateKnownRecipes(row)
+  if type(row.knownRecipes) ~= "table" then
+    row.knownRecipes = {}
+  end
+  local fresh = {}
   local found = 0
+  local unlinked = 0
   local n = GetNumTradeSkills() or 0
   for i = 1, n do
     local name, skillType = GetTradeSkillInfo(i)
@@ -254,18 +272,51 @@ function Cap:ScanOpenTradeSkill()
           or tonumber(string.match(link, "spell:(%d+)"))
       end
       if spellID then
-        row.knownRecipes[spellID] = true
+        fresh[spellID] = true
         found = found + 1
+      else
+        unlinked = unlinked + 1
       end
     end
   end
   restoreHeaders(collapsed)
+  if unlinked > 0 then
+    self.scanInProgress = false
+    if GetTime then
+      self.suppressTradeUntil = GetTime() + 1.25
+    end
+    OnyxiaGold.Log:Warn("Capabilities", string.format(
+      "Recipe scan %s left %d rows without a spell link; previous snapshot kept",
+      tostring(key), unlinked
+    ))
+    return
+  end
+  -- Complete scan replaces this profession. It does not append, and it does
+  -- not touch any other profession's snapshot.
+  row.knownRecipes[key] = fresh
+  local legacy = row.knownRecipes._legacy
+  if type(legacy) == "table" then
+    for spellID, _ in pairs(fresh) do
+      legacy[spellID] = nil
+    end
+    local map = OnyxiaGold.Database:SpellProfessionMap()
+    for spellID, profession in pairs(map) do
+      if profession == key then
+        legacy[spellID] = nil
+      end
+    end
+    if not next(legacy) then
+      row.knownRecipes._legacy = nil
+    end
+  end
   row.recipeScans[key] = {
     timestamp = time(),
     profession = key,
     skillRank = tonumber(skillRank) or 0,
     skillMax = tonumber(skillMax) or 0,
     count = found,
+    complete = true,
+    snapshotReplaced = true,
   }
   row.stateTimestamps.recipes = time()
   self.scanInProgress = false
@@ -273,7 +324,7 @@ function Cap:ScanOpenTradeSkill()
     self.suppressTradeUntil = GetTime() + 1.25
   end
   OnyxiaGold.Log:Debug("Capabilities", string.format(
-    "Recipe scan %s rank=%s recipes=%d",
+    "Recipe scan replaced %s rank=%s recipes=%d",
     tostring(key), tostring(skillRank), found
   ))
 end
@@ -295,16 +346,58 @@ function Cap:GetProfessionSkill(name)
   return row.professions[name]
 end
 
-function Cap:HasRecipe(recipeSpellID)
+function Cap:RecipeSnapshotReplaced(profession)
+  local row = rec()
+  if not row or not profession or type(row.recipeScans) ~= "table" then
+    return false
+  end
+  local scan = row.recipeScans[profession]
+  return scan and scan.snapshotReplaced and true or false
+end
+
+-- profession scopes the lookup. A replaced snapshot does not consult _legacy,
+-- so an abandoned profession cannot keep ghost recipes after a complete rescan.
+function Cap:HasRecipe(recipeSpellID, profession)
   recipeSpellID = tonumber(recipeSpellID)
   if not recipeSpellID then
     return true
   end
   local row = rec()
-  if not row then
+  if not row or type(row.knownRecipes) ~= "table" then
     return nil
   end
-  if row.knownRecipes[recipeSpellID] then
+  local known = row.knownRecipes
+  if profession then
+    local set = known[profession]
+    if type(set) == "table" and set[recipeSpellID] then
+      return true
+    end
+    if self:RecipeSnapshotReplaced(profession) then
+      return false
+    end
+    if not self:HasRecipeScan(profession) then
+      return false
+    end
+    local legacy = known._legacy
+    if type(legacy) == "table" and legacy[recipeSpellID] then
+      return true
+    end
+    -- Pre-migration flat set, if a scan exists and has not been replaced yet.
+    if known[recipeSpellID] and type(known[recipeSpellID]) ~= "table" then
+      return true
+    end
+    return false
+  end
+  for key, set in pairs(known) do
+    if key ~= "_legacy" and type(set) == "table" and set[recipeSpellID] then
+      return true
+    end
+  end
+  local legacy = known._legacy
+  if type(legacy) == "table" and legacy[recipeSpellID] then
+    return true
+  end
+  if known[recipeSpellID] and type(known[recipeSpellID]) ~= "table" then
     return true
   end
   return false
@@ -420,7 +513,7 @@ function Cap:CanExecute(requirements)
       result.reason = "UNKNOWN_RECIPE_STATE"
       return result
     end
-    if not self:HasRecipe(recipeSpellID) then
+    if not self:HasRecipe(recipeSpellID, profession) then
       result.executable = false
       result.missingRecipe = recipeSpellID
       result.reason = "Recipe not known"

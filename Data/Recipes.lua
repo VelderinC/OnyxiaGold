@@ -104,7 +104,9 @@ OnyxiaGold.Data.Transmutes = {
     supportsTransmuteMastery = true,
     requirements = {
       profession = "Alchemy",
-      minimumSkill = 440,
+      -- 395 is the skill required to perform Transmute: Titanium (spell 60350).
+      -- 440 is the difficulty colour (orange through grey), not the requirement.
+      minimumSkill = 395,
       recipeSpellID = 60350,
       specialisationOptional = "Transmutation",
     },

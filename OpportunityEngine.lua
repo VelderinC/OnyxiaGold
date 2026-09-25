@@ -24,8 +24,10 @@ local function newOpportunity(fields)
     netRevenue = fields.netRevenue or 0,
     expectedProfit = fields.expectedProfit or 0,
     roi = fields.roi or 0,
-    availableQuantity = fields.availableQuantity or fields.maxProfitableCrafts or 0,
-    maxProfitableCrafts = fields.maxProfitableCrafts or 0,
+    availableQuantity = fields.availableQuantity or fields.marketProfitableCrafts or fields.maxProfitableCrafts or 0,
+    -- Market-only. Not physical, affordable, or executable capacity.
+    marketProfitableCrafts = fields.marketProfitableCrafts or fields.maxProfitableCrafts or 0,
+    maxProfitableCrafts = fields.marketProfitableCrafts or fields.maxProfitableCrafts or 0,
     totalExpectedProfit = fields.totalExpectedProfit or 0,
     averageProfitPerCraft = fields.averageProfitPerCraft or fields.expectedProfit or 0,
     averageUnitCost = fields.averageUnitCost,
@@ -89,7 +91,7 @@ function Engine:ComputeConfidence(fields)
   end
 
   local outQty = fields.outputMarketQuantity or 0
-  local produced = fields.maxProfitableCrafts or 0
+  local produced = fields.marketProfitableCrafts or fields.maxProfitableCrafts or 0
   if fields.outputCount then
     produced = produced * fields.outputCount
   end
@@ -138,12 +140,14 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     return nil
   end
 
-  local firstCost = prices:GetAcquisitionCost(sourceID, sourceCount)
+  local marketCost = prices:GetAcquisitionCost(sourceID, sourceCount)
+  local firstCost = marketCost
+  local pricedFromMarket = marketCost and marketCost > 0
   local owned = 0
   if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
     owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(sourceID)
   end
-  if not firstCost or firstCost <= 0 then
+  if not pricedFromMarket then
     if owned >= sourceCount then
       local unit = prices:GetLiquidationPrice(sourceID)
       if not unit or unit <= 0 then
@@ -169,20 +173,27 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     return nil
   end
 
-  local batch = prices:GetMaxProfitableBatches(sourceID, sourceCount, net)
-  local crafts = batch and batch.batches or 1
-  local ownedCrafts = math.floor(owned / sourceCount)
-  if ownedCrafts > crafts then
-    crafts = ownedCrafts
+  -- Market capacity only. Owned stock must not inflate this count.
+  local batch = nil
+  if pricedFromMarket then
+    batch = prices:GetMaxProfitableBatches(sourceID, sourceCount, net)
   end
-  local totalProfit = batch and batch.totalProfit or (firstProfit * crafts)
-  if not batch and ownedCrafts > 1 then
-    totalProfit = firstProfit * ownedCrafts
+  local marketCrafts = 0
+  if batch and batch.batches and batch.batches > 0 then
+    marketCrafts = batch.batches
+  elseif pricedFromMarket then
+    marketCrafts = 1
   end
-  local avgProfit = crafts > 0 and math.floor(totalProfit / crafts) or firstProfit
+  local totalProfit = 0
+  if batch and batch.totalProfit then
+    totalProfit = batch.totalProfit
+  elseif marketCrafts > 0 then
+    totalProfit = firstProfit * marketCrafts
+  end
+  local avgProfit = marketCrafts > 0 and math.floor(totalProfit / marketCrafts) or firstProfit
   local inputQty = prices:GetBuyoutQuantity(sourceID)
   local outputQty = prices:GetBuyoutQuantity(targetID)
-  local produced = crafts * targetCount
+  local produced = marketCrafts * targetCount
   local share
   if outputQty > 0 then
     share = produced / outputQty
@@ -193,15 +204,15 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
   local conf, confNotes = self:ComputeConfidence({
     oldestDataAge = ages,
     outputMarketQuantity = outputQty,
-    maxProfitableCrafts = crafts,
+    marketProfitableCrafts = marketCrafts,
     outputCount = targetCount,
     expectedOutput = 1.0,
     hasDepth = hasDepth,
   })
 
   OnyxiaGold.Log:Debug("Engine", string.format(
-    "hit %s first=%d total=%d crafts=%d roi=%.2f conf=%.2f",
-    tostring(name), firstProfit, totalProfit, crafts, firstProfit / firstCost, conf
+    "hit %s first=%d total=%d marketCrafts=%d roi=%.2f conf=%.2f",
+    tostring(name), firstProfit, totalProfit, marketCrafts, firstProfit / firstCost, conf
   ))
 
   return newOpportunity({
@@ -213,8 +224,8 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     netRevenue = net,
     expectedProfit = firstProfit,
     roi = firstProfit / firstCost,
-    availableQuantity = crafts,
-    maxProfitableCrafts = crafts,
+    availableQuantity = marketCrafts,
+    marketProfitableCrafts = marketCrafts,
     totalExpectedProfit = totalProfit,
     averageProfitPerCraft = avgProfit,
     averageUnitCost = batch and batch.averageUnitCost,
@@ -343,7 +354,7 @@ function Engine:Refresh()
       tostring(top.name),
       top.expectedProfit or 0,
       top.totalExpectedProfit or 0,
-      tostring(top.maxProfitableCrafts)
+      tostring(top.marketProfitableCrafts or top.maxProfitableCrafts)
     ))
   else
     OnyxiaGold.Log:Debug("Engine", "0 opportunities found")

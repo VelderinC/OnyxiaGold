@@ -71,23 +71,56 @@ function Capital:GetListedExpectedNet()
   return 0
 end
 
+-- Reserve against a liquid total. Rounded to the nearest copper.
+function Capital:GetReserveOn(amount)
+  amount = tonumber(amount) or 0
+  if amount < 0 then
+    amount = 0
+  end
+  return math.floor(amount * self:GetReservePercent() + 0.5)
+end
+
 function Capital:GetWorkingCapital()
-  local liquid = self:GetLiquid()
-  return math.floor(liquid * self:GetReservePercent() + 0.5)
+  return self:GetReserveOn(self:GetLiquid())
 end
 
 function Capital:GetSpendableNow()
   local liquid = self:GetLiquid()
-  local reserve = self:GetWorkingCapital()
-  local spend = liquid - reserve
+  local spend = liquid - self:GetWorkingCapital()
   if spend < 0 then
     spend = 0
   end
   return spend
 end
 
+-- Liquid that would be on the character after collecting claimable mail.
+function Capital:GetPostMailLiquid()
+  return self:GetLiquid() + self:GetClaimableMail()
+end
+
+-- Reserve recalculated on post-collection liquid, not on current deployable.
+function Capital:GetPostMailReserve()
+  return self:GetReserveOn(self:GetPostMailLiquid())
+end
+
+--[[
+  Spendable after mail collection.
+
+  Reserve applies to (liquid + claimable), not to current deployable plus mail.
+  Example: liquid 100g, reserve 10%, mail 900g.
+  Current deployable is 90g. Post-collection liquid is 1000g,
+  post-collection reserve is 100g, post-collection deployable is 900g.
+  Adding mail on top of current deployable (990g) is wrong.
+  A partial mailbox snapshot understates claimable gold; this figure is then
+  a lower bound, not an exact post-collection budget.
+]]
 function Capital:GetSpendableAfterMail()
-  return self:GetSpendableNow() + self:GetClaimableMail()
+  local liquid = self:GetPostMailLiquid()
+  local spend = liquid - self:GetPostMailReserve()
+  if spend < 0 then
+    spend = 0
+  end
+  return spend
 end
 
 function Capital:GetBagMarketValue()
@@ -118,6 +151,18 @@ function Capital:GetPortfolioSummary()
   local mail = OnyxiaGold.Mail
   local auctions = OnyxiaGold.OwnedAuctions
   local inv = OnyxiaGold.Inventory
+  local mailComplete, mailVisible, mailTotal
+  if mail and mail.IsSnapshotComplete then
+    mailComplete = mail:IsSnapshotComplete()
+    mailVisible = mail:GetVisibleCount()
+    mailTotal = mail:GetTotalCount()
+  end
+  local auctionsComplete, auctionsShown, auctionsTotal
+  if auctions and auctions.IsSnapshotComplete then
+    auctionsComplete = auctions:IsSnapshotComplete()
+    auctionsShown = auctions:GetShownCount()
+    auctionsTotal = auctions:GetTotalCount()
+  end
   return {
     liquid = self:GetLiquid(),
     claimableMail = self:GetClaimableMail(),
@@ -128,8 +173,16 @@ function Capital:GetPortfolioSummary()
     bags = self:GetBagMarketValue(),
     bank = self:GetBankMarketValue(),
     reserve = self:GetWorkingCapital(),
+    postMailLiquid = self:GetPostMailLiquid(),
+    postMailReserve = self:GetPostMailReserve(),
     deployable = self:GetSpendableNow(),
     deployableAfterMail = self:GetSpendableAfterMail(),
+    mailComplete = mailComplete,
+    mailVisible = mailVisible,
+    mailTotal = mailTotal,
+    auctionsComplete = auctionsComplete,
+    auctionsShown = auctionsShown,
+    auctionsTotal = auctionsTotal,
     estimatedNetWorth = self:GetEstimatedNetWorth(),
     mailAge = mail and mail.GetSnapshotAge and mail:GetSnapshotAge() or nil,
     auctionAge = auctions and auctions.GetSnapshotAge and auctions:GetSnapshotAge() or nil,

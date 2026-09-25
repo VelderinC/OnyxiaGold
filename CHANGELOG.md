@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 — Preview filters
+
+- Show unlearned Alchemy and Enchanting recipes, and cash-short conversions with no profession, as skill or gold previews rather than buys.
+
 ## 0.1.14 — Beyond gold
 
 - An off-by-default checkbox lists profitable Alchemy and Enchanting actions that cost more than deployable gold, with the cash required, the shortfall, and the profession skill when that is also short.

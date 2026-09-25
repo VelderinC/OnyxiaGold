@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19 — Void Shatter floor
+
+- Void Shatter is one Void Crystal into two Large Prismatic Shards, one craft, and only when the Runed Eternium Rod is on the character and the recipe is known. If selling the crystal leaves more, the row says sell.
+- The two prismatic recipes need the Runed Fel Iron Rod on the character and a known recipe. Abyss Crystal has no shatter line.
+
 ## 0.1.18 — Owned disenchant
 
 - A bag item with a known yield can be disenchanted when that beats its vendor value. Rares become one shard. Epics at item level 200–277 become one Abyss Crystal. Set green brackets use the minimum quantity. Nothing is bought.

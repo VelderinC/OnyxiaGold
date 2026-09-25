@@ -115,11 +115,71 @@ function Scanner:ResetRuntime()
     self.frame:SetScript("OnUpdate", nil)
   end
   self:EnableScanButtons()
+  self:NotifyScanProgress()
 end
 
 function Scanner:SetStatus(text)
   if OnyxiaGold.UI and OnyxiaGold.UI.SetStatus then
     OnyxiaGold.UI:SetStatus(text)
+  end
+  self:NotifyScanProgress()
+end
+
+-- Numbers for the scan bar. Painting stays in the UI.
+-- index is work already finished (pages for a full scan, watchlist items for a quick scan).
+-- page is the 0-based page in progress. pagesTotal is nil until the first result names it.
+function Scanner:GetProgress()
+  if not self:IsScanning() then
+    return nil
+  end
+  local elapsed = 0
+  if (self.startedAt or 0) > 0 then
+    elapsed = GetTime() - self.startedAt
+    if elapsed < 0 then
+      elapsed = 0
+    end
+  end
+  local page = self.page or 0
+  if self.mode == "quick" then
+    local total = 0
+    if self.quickQueue then
+      total = table.getn(self.quickQueue)
+    end
+    local index = (self.quickIndex or 1) - 1
+    if index < 0 then
+      index = 0
+    end
+    if total > 0 and index > total then
+      index = total
+    end
+    return {
+      mode = "quick",
+      index = index,
+      total = total,
+      page = page,
+      pagesTotal = self.pagesTotal,
+      elapsed = elapsed,
+      name = self.expectedName,
+    }
+  end
+  local index = page
+  if self.state == STATE_FINALIZING then
+    index = page + 1
+  end
+  return {
+    mode = "full",
+    index = index,
+    total = self.pagesTotal,
+    page = page,
+    pagesTotal = self.pagesTotal,
+    elapsed = elapsed,
+  }
+end
+
+function Scanner:NotifyScanProgress()
+  local ui = OnyxiaGold.UI
+  if ui and ui.PaintScanProgress then
+    ui:PaintScanProgress()
   end
 end
 
@@ -730,6 +790,8 @@ function Scanner:OnUpdate(elapsed)
   elseif self.state == STATE_FINALIZING then
     self:FinalizeSlice()
   end
+
+  self:NotifyScanProgress()
 end
 
 local eventFrame = CreateFrame("Frame")

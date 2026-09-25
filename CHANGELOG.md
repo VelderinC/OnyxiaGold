@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.21 — Stack size and deposit
+
+- A new scan keeps stack size beside price. Two stack sizes at the same unit price stay two rows.
+- A post row shows the deposit `CalculateAuctionDeposit` returns for 12, 24, and 48 hours. If the client has no number, the row says to put the stack in the post slot.
+- If his own auction is already the cheapest, the row says leave it and the buyout box is not moved under that price. Nothing calls `StartAuction` or `CancelAuction`.
+
 ## 0.1.20 — One no-cooldown craft
 
 - Arcanite, Primal Might, and Elemental Fire are one comparison. The row casts the winner once and names the gold given up by skipping the runner-up. They are not on the 20-hour cooldown.

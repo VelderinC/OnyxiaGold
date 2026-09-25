@@ -866,12 +866,15 @@ local function actionFromPerson(person, index)
   local kind = "CRAFT"
   local name = opp.name or "Craft"
   local detail
+  local namedCast = (opp.sharedCooldownRow and opp.cooldownDecision == "cast") or opp.benchRow
   if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
     name = opp.winnerName or opp.name or "20-hour transmute"
+  elseif opp.benchRow then
+    name = opp.winnerName or opp.name or "Transmute"
   end
   if cash <= 0 then
     kind = "CRAFT_OWNED"
-    if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+    if namedCast then
       detail = opp.forgoneLine or string.format("Use owned materials · %d crafts", crafts)
     else
       detail = string.format("Use owned materials · %d crafts", crafts)
@@ -902,12 +905,15 @@ local function actionFromPerson(person, index)
       table.insert(bits, tostring(needBuy) .. " " .. tostring(itemName))
     end
     kind = "BUY_AND_CRAFT"
-    if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+    if namedCast then
       detail = opp.forgoneLine or string.format("Then %d %s", crafts, tostring(name))
     else
       name = "Buy " .. table.concat(bits, " + ")
       detail = string.format("Then %d %s", crafts, tostring(opp.name))
     end
+  end
+  if opp.castSeconds and opp.castSeconds > 0 then
+    detail = (detail or "") .. " · " .. tostring(opp.castSeconds) .. " sec"
   end
 
   return {

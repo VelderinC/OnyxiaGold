@@ -167,7 +167,71 @@ OnyxiaGold.Data.Transmutes = {
       minimumSkill = 430,
       recipeSpellID = 57425,
     }),
-    notes = "Reagents are the verified 3.3.5 list. No cooldown in that spell data.",
+    notes = "Reagents are the verified 3.3.5 list. No cooldown in that spell data. Cast time was not re-read.",
+  },
+  -- Spell pages show no cooldown. One craft of the best of these, not a pile,
+  -- and not the 20-hour group. Elemental Fire's mastery is unset, so its base count stays 3.
+  {
+    id = "arcanite",
+    name = "Transmute: Arcanite",
+    typeLabel = "Transmute",
+    singleCraft = true,
+    castSeconds = 2,
+    inputs = {
+      { itemID = I.THORIUM_BAR.id, count = 1 },
+      { itemID = I.ARCANE_CRYSTAL.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.ARCANITE_BAR.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 275,
+      recipeSpellID = 17187,
+    }),
+    notes = "One Thorium Bar and one Arcane Crystal. No cooldown on the spell page. One craft.",
+  },
+  {
+    id = "elemental_fire",
+    name = "Transmute: Elemental Fire",
+    typeLabel = "Transmute",
+    singleCraft = true,
+    castSeconds = 25,
+    inputs = {
+      { itemID = I.HEART_OF_FIRE.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.ELEMENTAL_FIRE.id, count = 3 },
+    },
+    supportsTransmuteMastery = false,
+    requirements = alchemyTool({
+      minimumSkill = 300,
+      recipeSpellID = 25146,
+    }),
+    notes = "One Heart of Fire becomes three Elemental Fire. Mastery on that base count is unset. One craft.",
+  },
+  {
+    id = "primal_might",
+    name = "Transmute: Primal Might",
+    typeLabel = "Transmute",
+    singleCraft = true,
+    castSeconds = 5,
+    inputs = {
+      { itemID = I.PRIMAL_EARTH.id, count = 1 },
+      { itemID = I.PRIMAL_WATER.id, count = 1 },
+      { itemID = I.PRIMAL_AIR.id, count = 1 },
+      { itemID = I.PRIMAL_FIRE.id, count = 1 },
+      { itemID = I.PRIMAL_MANA.id, count = 1 },
+    },
+    outputs = {
+      { itemID = I.PRIMAL_MIGHT.id, count = 1 },
+    },
+    supportsTransmuteMastery = true,
+    requirements = alchemyTool({
+      minimumSkill = 350,
+      recipeSpellID = 29688,
+    }),
+    notes = "One of each base primal. No cooldown on the spell page. One craft.",
   },
   {
     id = "ametrine",

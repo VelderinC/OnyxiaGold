@@ -45,6 +45,12 @@ OnyxiaGold.Data.Watchlist = {
   entry("arcane_dust", I.ARCANE_DUST, "Enchanting"),
   entry("mageweave_cloth", I.MAGEWEAVE_CLOTH, "Cloth"),
   entry("vision_dust", I.VISION_DUST, "Enchanting"),
+  entry("thorium_bar", I.THORIUM_BAR, "Transmute"),
+  entry("arcane_crystal", I.ARCANE_CRYSTAL, "Transmute"),
+  entry("arcanite_bar", I.ARCANITE_BAR, "Transmute"),
+  entry("heart_of_fire", I.HEART_OF_FIRE, "Transmute"),
+  entry("elemental_fire", I.ELEMENTAL_FIRE, "Transmute"),
+  entry("primal_might", I.PRIMAL_MIGHT, "Transmute"),
   entry("abyss_crystal", I.ABYSS_CRYSTAL, "Enchanting"),
   entry("infinite_dust", I.INFINITE_DUST, "Enchanting"),
 }

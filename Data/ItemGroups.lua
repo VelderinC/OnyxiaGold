@@ -92,6 +92,14 @@ local Items = {
   PRIMAL_LIFE = { id = 21886, name = "Primal Life" },
   ETERNAL_MIGHT = { id = 40248, name = "Eternal Might" },
 
+  -- No-cooldown alchemy. One craft until a second cast is seen on Warmane.
+  THORIUM_BAR = { id = 12359, name = "Thorium Bar" },
+  ARCANE_CRYSTAL = { id = 12363, name = "Arcane Crystal" },
+  ARCANITE_BAR = { id = 12360, name = "Arcanite Bar" },
+  HEART_OF_FIRE = { id = 7077, name = "Heart of Fire" },
+  ELEMENTAL_FIRE = { id = 7068, name = "Elemental Fire" },
+  PRIMAL_MIGHT = { id = 23571, name = "Primal Might" },
+
   -- Upcoming economic materials (watchlist / later engines)
   NETHERWEAVE_CLOTH = { id = 21877, name = "Netherweave Cloth" },
   BOLT_OF_NETHERWEAVE = { id = 21840, name = "Bolt of Netherweave" },

@@ -7,8 +7,8 @@
   personally executable on the intended Druid.
 
   Essence/shard item-use conversions do not require Enchanting.
-  Abyssal Shatter, Void Shatter, and vellum scrolls are Enchanting-gated
-  and belong in v0.2.1+ once 3.3.5 outputs are confirmed.
+  Void Shatter and the two prismatic recipes are Enchanting spells.
+  Abyssal Shatter stays out: its counts are unset.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -18,7 +18,7 @@ local I = OnyxiaGold.Data.Items
 
 -- Essence pairs are reversible item-use conversions. No profession and no skill,
 -- so they are legal at Alchemy 1 and Enchanting 1. Dream Shard combines one way.
--- Prismatic shards stay a priced pair, not an action.
+-- Prismatic shards are Enchanting spells, not item clicks. See EnchantCrafts.
 local function essencePair(id, lesser, greater, shortName)
   return {
     id = id,
@@ -83,29 +83,7 @@ OnyxiaGold.Data.Conversions = {
     notesForward = "1 Greater converts into 3 Lesser. Item-use conversion; no profession required.",
     notesReverse = "3 Lesser convert into 1 Greater. Item-use conversion; no profession required.",
   },
-  {
-    id = "small_prismatic_to_large",
-    kind = "shard",
-    typeLabel = "Shard",
-    sourceItemID = I.SMALL_PRISMATIC_SHARD.id,
-    sourceCount = 3,
-    targetItemID = I.LARGE_PRISMATIC_SHARD.id,
-    targetCount = 1,
-    reversible = true,
-    -- Both directions stay priced. The rod is recorded. The Enchanting spell
-    -- is not an action in this slice, so neither direction is a craft row.
-    actionable = false,
-    requirements = {
-      profession = "Enchanting",
-      tool = "Runed Fel Iron Rod",
-      toolItemID = I.RUNED_FEL_IRON_ROD.id,
-      toolConsumed = false,
-    },
-    nameForward = "Small Prismatic → Large Prismatic",
-    nameReverse = "Large Prismatic → Small Prismatic",
-    notesForward = "Market relationship only. Runed Fel Iron Rod is required on the character. Not an action until the Enchanting recipe is added.",
-    notesReverse = "Market relationship only. Runed Fel Iron Rod is required on the character. Not an action until the Enchanting recipe is added.",
-  },
+  -- Prismatic shards are Enchanting spells, not item clicks. See EnchantCrafts.
   {
     id = "small_dream_to_dream",
     kind = "shard",
@@ -442,3 +420,57 @@ addShared({
   }),
   notes = "Minimum skill is unset. Not an action.",
 })
+
+-- Enchanting crafts. No transmute mastery. The rod is a tool and is not consumed.
+-- Abyss Crystal has no shatter line.
+local function enchantCraft(row)
+  row.typeLabel = "Enchanting"
+  row.supportsTransmuteMastery = false
+  row.requirements.profession = "Enchanting"
+  row.requirements.toolConsumed = false
+  return row
+end
+
+OnyxiaGold.Data.EnchantCrafts = {
+  enchantCraft({
+    id = "void_shatter",
+    name = "Void Shatter",
+    maxCrafts = 1,
+    compareToSelling = true,
+    inputs = { { itemID = I.VOID_CRYSTAL.id, count = 1 } },
+    outputs = { { itemID = I.LARGE_PRISMATIC_SHARD.id, count = 2 } },
+    requirements = {
+      minimumSkill = 375,
+      recipeSpellID = 45765,
+      tool = "Runed Eternium Rod",
+      toolItemID = I.RUNED_ETERNIUM_ROD.id,
+    },
+    notes = "One Void Crystal becomes two Large Prismatic Shards. One craft.",
+  }),
+  enchantCraft({
+    id = "large_prismatic_shard",
+    name = "Large Prismatic Shard",
+    inputs = { { itemID = I.SMALL_PRISMATIC_SHARD.id, count = 3 } },
+    outputs = { { itemID = I.LARGE_PRISMATIC_SHARD.id, count = 1 } },
+    requirements = {
+      minimumSkill = 335,
+      recipeSpellID = 28022,
+      tool = "Runed Fel Iron Rod",
+      toolItemID = I.RUNED_FEL_IRON_ROD.id,
+    },
+    notes = "Three Small Prismatic Shards become one Large. The rod must be on the character.",
+  }),
+  enchantCraft({
+    id = "small_prismatic_shard",
+    name = "Small Prismatic Shard",
+    inputs = { { itemID = I.LARGE_PRISMATIC_SHARD.id, count = 1 } },
+    outputs = { { itemID = I.SMALL_PRISMATIC_SHARD.id, count = 3 } },
+    requirements = {
+      minimumSkill = 335,
+      recipeSpellID = 42615,
+      tool = "Runed Fel Iron Rod",
+      toolItemID = I.RUNED_FEL_IRON_ROD.id,
+    },
+    notes = "One Large Prismatic Shard becomes three Small. The rod must be on the character.",
+  }),
+}

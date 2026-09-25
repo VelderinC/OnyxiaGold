@@ -26,6 +26,7 @@ local Items = {
   -- Prismatic shards are a priced pair. Dream Shards combine one way.
   SMALL_PRISMATIC_SHARD = { id = 22448, name = "Small Prismatic Shard" },
   LARGE_PRISMATIC_SHARD = { id = 22449, name = "Large Prismatic Shard" },
+  VOID_CRYSTAL = { id = 22450, name = "Void Crystal" },
   SMALL_DREAM_SHARD = { id = 34053, name = "Small Dream Shard" },
   DREAM_SHARD = { id = 34052, name = "Dream Shard" },
 

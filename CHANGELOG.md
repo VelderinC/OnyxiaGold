@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9 — Readable window and auction button
+
+- Solid dark window, wider columns that no longer collide, and an OnyxiaGold button on the auction house title bar.
+
 ## 0.1.7 — Scan progress and action rows
 
 - Show a progress bar while Quick Scan or Full Scan runs, and show the buy, conversion, and post on each action row.

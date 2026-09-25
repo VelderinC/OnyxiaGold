@@ -9,19 +9,20 @@ OnyxiaGold.UI = OnyxiaGold.UI or {}
 
 local UI = OnyxiaGold.UI
 
-local FRAME_WIDTH = 760
-local FRAME_HEIGHT = 572
+local FRAME_WIDTH = 920
+local FRAME_HEIGHT = 640
 local NUM_ROWS = 10
-local ROW_HEIGHT = 32
-local HEADER_Y = -170
-local LIST_TOP = HEADER_Y - 18
+local ROW_HEIGHT = 36
+local HEADER_Y = -188
+local LIST_TOP = HEADER_Y - 28
+local COL_GAP = 16
 
 local COLS = {
-  { key = "name", label = "What to do now", width = 360, justify = "LEFT" },
-  { key = "profit", label = "EV", width = 110, justify = "RIGHT" },
-  { key = "cash", label = "Cash", width = 110, justify = "RIGHT" },
-  { key = "crafts", label = "Qty", width = 50, justify = "RIGHT" },
-  { key = "type", label = "Type", width = 70, justify = "LEFT" },
+  { key = "name", label = "What to do now", width = 400, justify = "LEFT" },
+  { key = "profit", label = "EV", width = 112, justify = "RIGHT" },
+  { key = "cash", label = "Cash", width = 124, justify = "RIGHT" },
+  { key = "crafts", label = "Qty", width = 52, justify = "RIGHT" },
+  { key = "type", label = "Type", width = 92, justify = "LEFT" },
 }
 
 local function addLabel(parent, text, template)
@@ -147,18 +148,21 @@ function UI:Create()
     frame:StopMovingOrSizing()
   end)
   frame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
     tile = true,
-    tileSize = 32,
+    tileSize = 16,
     edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 },
   })
+  frame:SetBackdropColor(0.06, 0.05, 0.04, 1)
+  frame:SetBackdropBorderColor(1, 1, 1, 1)
   frame:Hide()
   tinsert(UISpecialFrames, "OnyxiaGoldFrame")
 
   local title = addLabel(frame, "OnyxiaGold", "GameFontNormalLarge")
-  title:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -14)
+  title:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -16)
+  setRGB(title, 1, 0.82, 0)
 
   local close = CreateFrame("Button", "OnyxiaGoldCloseButton", frame, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
@@ -175,7 +179,7 @@ function UI:Create()
   local quickBtn = CreateFrame("Button", "OnyxiaGoldQuickScanButton", frame, "UIPanelButtonTemplate")
   quickBtn:SetWidth(110)
   quickBtn:SetHeight(22)
-  quickBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -38)
+  quickBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -42)
   quickBtn:SetText("Quick Scan")
   quickBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Quick Scan clicked")
@@ -185,7 +189,7 @@ function UI:Create()
   local fullBtn = CreateFrame("Button", "OnyxiaGoldFullScanButton", frame, "UIPanelButtonTemplate")
   fullBtn:SetWidth(90)
   fullBtn:SetHeight(22)
-  fullBtn:SetPoint("LEFT", quickBtn, "RIGHT", 6, 0)
+  fullBtn:SetPoint("LEFT", quickBtn, "RIGHT", 8, 0)
   fullBtn:SetText("Full Scan")
   fullBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Full Scan clicked")
@@ -195,7 +199,7 @@ function UI:Create()
   local refreshBtn = CreateFrame("Button", "OnyxiaGoldRefreshButton", frame, "UIPanelButtonTemplate")
   refreshBtn:SetWidth(90)
   refreshBtn:SetHeight(22)
-  refreshBtn:SetPoint("LEFT", fullBtn, "RIGHT", 6, 0)
+  refreshBtn:SetPoint("LEFT", fullBtn, "RIGHT", 8, 0)
   refreshBtn:SetText("Refresh")
   refreshBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Refresh opportunities clicked")
@@ -205,7 +209,7 @@ function UI:Create()
   local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")
   master:SetWidth(24)
   master:SetHeight(24)
-  master:SetPoint("LEFT", refreshBtn, "RIGHT", 8, 0)
+  master:SetPoint("LEFT", refreshBtn, "RIGHT", 12, 0)
   local masterText = getglobal("OnyxiaGoldMasterCheckText")
   if masterText then
     masterText:SetText("Force TM")
@@ -220,32 +224,32 @@ function UI:Create()
   end)
 
   local identity = addLabel(frame, "", "GameFontHighlightSmall")
-  identity:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -64)
+  identity:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -72)
   identity:SetJustifyH("LEFT")
 
   local professions = addLabel(frame, "", "GameFontDisableSmall")
-  professions:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -80)
-  professions:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -80)
+  professions:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -90)
+  professions:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -90)
   professions:SetJustifyH("LEFT")
 
   local factory = addLabel(frame, "", "GameFontDisableSmall")
-  factory:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -94)
-  factory:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -94)
+  factory:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -108)
+  factory:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -108)
   factory:SetJustifyH("LEFT")
 
   local capital = addLabel(frame, "", "GameFontHighlightSmall")
-  capital:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -112)
-  capital:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -112)
+  capital:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -128)
+  capital:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -128)
   capital:SetJustifyH("LEFT")
 
   local deploy = addLabel(frame, "", "GameFontNormalSmall")
-  deploy:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -128)
+  deploy:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -146)
   deploy:SetJustifyH("LEFT")
   setRGB(deploy, 0.35, 0.85, 0.45)
 
   local market = addLabel(frame, "Market: —", "GameFontDisableSmall")
-  market:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -144)
-  market:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -144)
+  market:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -164)
+  market:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -164)
   market:SetJustifyH("LEFT")
 
   local capitalHit = CreateFrame("Frame", "OnyxiaGoldCapitalHit", frame)
@@ -262,7 +266,7 @@ function UI:Create()
   local header = CreateFrame("Frame", "OnyxiaGoldHeader", frame)
   header:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, HEADER_Y)
   header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -36, HEADER_Y)
-  header:SetHeight(16)
+  header:SetHeight(18)
 
   local x = 0
   for i = 1, table.getn(COLS) do
@@ -271,9 +275,18 @@ function UI:Create()
     fs:SetPoint("LEFT", header, "LEFT", x, 0)
     fs:SetWidth(col.width)
     fs:SetJustifyH(col.justify)
+    fs:SetJustifyV("MIDDLE")
+    fs:SetWordWrap(false)
     fs:SetText(col.label)
-    x = x + col.width
+    setRGB(fs, 1, 0.82, 0)
+    x = x + col.width + COL_GAP
   end
+
+  local headerRule = header:CreateTexture(nil, "BORDER")
+  headerRule:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 0, -4)
+  headerRule:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", 0, -4)
+  headerRule:SetHeight(1)
+  headerRule:SetTexture(0.85, 0.68, 0.25, 0.85)
 
   local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", frame, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, LIST_TOP)
@@ -335,7 +348,7 @@ function UI:Create()
     if i % 2 == 0 then
       local bg = row:CreateTexture(nil, "BACKGROUND")
       bg:SetAllPoints(row)
-      bg:SetTexture(1, 1, 1, 0.035)
+      bg:SetTexture(1, 1, 1, 0.06)
       row.bg = bg
     end
 
@@ -345,17 +358,19 @@ function UI:Create()
       local col = COLS[c]
       local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
       fs:SetPoint("LEFT", row, "LEFT", cx, 0)
-      fs:SetWidth(col.width - 6)
+      fs:SetWidth(col.width)
       fs:SetJustifyH(col.justify)
       fs:SetJustifyV("MIDDLE")
       fs:SetText("")
       if col.key == "name" then
-        fs:SetHeight(ROW_HEIGHT - 2)
+        fs:SetHeight(ROW_HEIGHT - 6)
         fs:SetWordWrap(true)
         fs:SetNonSpaceWrap(false)
+      else
+        fs:SetWordWrap(false)
       end
       row.cells[col.key] = fs
-      cx = cx + col.width
+      cx = cx + col.width + COL_GAP
     end
 
     row:SetScript("OnEnter", function(self)
@@ -917,4 +932,59 @@ function UI:Toggle()
   else
     self:Show()
   end
+end
+
+function UI:EnsureAuctionHouseButton()
+  if getglobal("OnyxiaGoldAuctionButton") or not AuctionFrame then
+    return
+  end
+  local btn = CreateFrame("Button", "OnyxiaGoldAuctionButton", AuctionFrame, "UIPanelButtonTemplate")
+  btn:SetWidth(110)
+  btn:SetHeight(22)
+  btn:SetText("OnyxiaGold")
+  local function raiseButton(self)
+    local parent = self:GetParent()
+    if not parent then
+      return
+    end
+    self:SetFrameStrata(parent:GetFrameStrata())
+    local level = parent:GetFrameLevel() or 1
+    if level < 1 then
+      level = 1
+    end
+    self:SetFrameLevel(level + 5)
+  end
+  raiseButton(btn)
+  btn:HookScript("OnShow", raiseButton)
+  if AuctionFrameCloseButton then
+    btn:SetPoint("TOPRIGHT", AuctionFrameCloseButton, "TOPLEFT", -8, -5)
+  else
+    btn:SetPoint("TOPRIGHT", AuctionFrame, "TOPRIGHT", -36, -13)
+  end
+  btn:SetScript("OnClick", function()
+    OnyxiaGold.UI:Toggle()
+  end)
+  btn:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Open OnyxiaGold", 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  btn:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+  self.auctionButton = btn
+end
+
+local auctionWatcher = CreateFrame("Frame", "OnyxiaGoldAuctionWatcher", UIParent)
+auctionWatcher:RegisterEvent("ADDON_LOADED")
+auctionWatcher:RegisterEvent("AUCTION_HOUSE_SHOW")
+auctionWatcher:SetScript("OnEvent", function(_, event, name)
+  if event == "ADDON_LOADED" and name ~= "Blizzard_AuctionUI" then
+    return
+  end
+  OnyxiaGold.UI:EnsureAuctionHouseButton()
+end)
+
+if AuctionFrame then
+  UI:EnsureAuctionHouseButton()
 end

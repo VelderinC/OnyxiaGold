@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.28 — Window layout
+
+- The /og window is split into Auction, Options, the action list, and Mail. Held is now In bags, Collect Gold is now Take gold, and Factory Sweep is now Take mail. The clicks are unchanged.
+
 ## 0.1.27 — Bag sort order
 
 - Sort still stacks partial stacks on one click. Empty slots end up at the front, and items swap into order at the back: same item together, then class, subclass, quality, and name. If the client stops accepting moves, the next click continues.

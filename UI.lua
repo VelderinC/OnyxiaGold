@@ -17,13 +17,21 @@ local MAX_WIDTH = 1600
 local MAX_HEIGHT = 1200
 local NUM_ROWS = 8
 local ROW_HEIGHT = 58
-local HEADER_Y = -188
-local LIST_TOP = HEADER_Y - 28
-local LIST_BOTTOM = 204
-local COL_GAP = 16
+local COL_GAP = 12
+local PAD = 14
+-- Buy and a later Post button share this strip on the right of each row.
+local BUTTON_GUTTER = 72
+local BUTTON_HEIGHT = 22
+
+local COL_WIDTH = {
+  profit = 108,
+  cash = 120,
+  crafts = 56,
+  type = 100,
+}
 
 local COLS = {
-  { key = "name", label = "What to do now", width = 560, justify = "LEFT" },
+  { key = "name", label = "Action", width = 560, justify = "LEFT" },
   { key = "profit", label = "Profit", width = 112, justify = "RIGHT" },
   { key = "cash", label = "Cash", width = 124, justify = "RIGHT" },
   { key = "crafts", label = "Qty", width = 52, justify = "RIGHT" },
@@ -290,6 +298,102 @@ local function identityLine()
   return string.format("%s · %s %s · %d", id.name, faction, className, level)
 end
 
+local function applyQuietPanel(panel, list)
+  panel:SetBackdrop({
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true,
+    tileSize = 16,
+    edgeSize = 8,
+    insets = { left = 2, right = 2, top = 2, bottom = 2 },
+  })
+  if list then
+    panel:SetBackdropColor(0.04, 0.035, 0.03, 0.94)
+    panel:SetBackdropBorderColor(0.78, 0.66, 0.32, 0.9)
+  else
+    panel:SetBackdropColor(0.06, 0.05, 0.04, 0.9)
+    panel:SetBackdropBorderColor(0.55, 0.46, 0.26, 0.75)
+  end
+end
+
+local function sectionLabel(parent, text)
+  local fs = addLabel(parent, text, "GameFontNormalSmall")
+  setRGB(fs, 1, 0.82, 0)
+  fs:SetJustifyH("LEFT")
+  fs:SetJustifyV("MIDDLE")
+  fs:SetWordWrap(false)
+  return fs
+end
+
+function UI:LayoutColumns()
+  if not self.rows or not self.frame then
+    return
+  end
+  local width
+  local sample = self.rows[1]
+  if sample and sample.GetWidth then
+    width = tonumber(sample:GetWidth())
+  end
+  if not width or width < 100 then
+    local frameWidth = tonumber(self.frame:GetWidth()) or FRAME_WIDTH
+    -- Pads, scroll insets, and the scrollbar gutter. See the list anchors in Create.
+    width = frameWidth - 72
+  end
+  if width < 100 then
+    return
+  end
+  local fixed = BUTTON_GUTTER + 4
+  for i = 1, table.getn(COLS) do
+    local key = COLS[i].key
+    if key ~= "name" then
+      fixed = fixed + (COL_WIDTH[key] or 80) + COL_GAP
+    end
+  end
+  local nameW = width - fixed
+  if nameW < 180 then
+    nameW = 180
+  end
+  local x = 4
+  for i = 1, table.getn(COLS) do
+    local col = COLS[i]
+    local w = nameW
+    if col.key ~= "name" then
+      w = COL_WIDTH[col.key] or 80
+    end
+    local headerFs = self.headerCells and self.headerCells[col.key]
+    if headerFs then
+      headerFs:ClearAllPoints()
+      headerFs:SetPoint("LEFT", headerFs:GetParent(), "LEFT", x, 0)
+      headerFs:SetWidth(w)
+      headerFs:SetJustifyH(col.justify)
+    end
+    for r = 1, NUM_ROWS do
+      local row = self.rows[r]
+      local fs = row and row.cells and row.cells[col.key]
+      if fs then
+        fs:ClearAllPoints()
+        fs:SetPoint("LEFT", row, "LEFT", x, 0)
+        fs:SetWidth(w)
+        fs:SetJustifyH(col.justify)
+      end
+    end
+    x = x + w + COL_GAP
+  end
+  if self.tradeScroll and self.tradeEdit and self.tradeScroll.GetWidth then
+    local tw = self.tradeScroll:GetWidth()
+    if tw and tw > 40 then
+      local nextW = math.floor(tw - 8)
+      if nextW < 40 then
+        nextW = 40
+      end
+      local current = self.tradeEdit:GetWidth() or 0
+      if math.abs(current - nextW) > 1 then
+        self.tradeEdit:SetWidth(nextW)
+      end
+    end
+  end
+end
+
 function UI:Create()
   if self.frame then
     return
@@ -316,47 +420,66 @@ function UI:Create()
     frame:StopMovingOrSizing()
   end)
   frame:SetBackdrop({
-    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile = true,
-    tileSize = 16,
-    edgeSize = 32,
-    insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    tileSize = 32,
+    edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
   })
-  frame:SetBackdropColor(0.06, 0.05, 0.04, 1)
-  frame:SetBackdropBorderColor(1, 1, 1, 1)
+  frame:SetBackdropColor(0.32, 0.27, 0.20, 1)
+  frame:SetBackdropBorderColor(0.86, 0.74, 0.42, 1)
   frame:Hide()
   tinsert(UISpecialFrames, "OnyxiaGoldFrame")
 
   local title = addLabel(frame, "OnyxiaGold", "GameFontNormalLarge")
-  title:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -16)
+  title:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -12)
   setRGB(title, 1, 0.82, 0)
 
+  local versionText = ""
+  if GetAddOnMetadata then
+    versionText = GetAddOnMetadata("OnyxiaGold", "Version") or ""
+  end
+  if versionText == "" and OnyxiaGold.Version then
+    versionText = OnyxiaGold.Version
+  end
+  local versionLabel = addLabel(frame, versionText, "GameFontHighlightSmall")
+  versionLabel:SetPoint("LEFT", title, "RIGHT", 10, -1)
+  setRGB(versionLabel, 0.86, 0.74, 0.42)
+
   local close = CreateFrame("Button", "OnyxiaGoldCloseButton", frame, "UIPanelCloseButton")
-  close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+  close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
 
   local logBtn = CreateFrame("Button", "OnyxiaGoldOpenLogButton", frame, "UIPanelButtonTemplate")
   logBtn:SetWidth(56)
-  logBtn:SetHeight(22)
-  logBtn:SetPoint("RIGHT", close, "LEFT", -4, 0)
+  logBtn:SetHeight(BUTTON_HEIGHT)
+  logBtn:SetPoint("RIGHT", close, "LEFT", -2, -1)
   logBtn:SetText("Log")
   logBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Toggle()
   end)
 
-  local quickBtn = CreateFrame("Button", "OnyxiaGoldQuickScanButton", frame, "UIPanelButtonTemplate")
-  quickBtn:SetWidth(110)
-  quickBtn:SetHeight(22)
-  quickBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -42)
+  local auction = CreateFrame("Frame", "OnyxiaGoldAuctionSection", frame)
+  auction:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -42)
+  auction:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PAD, -42)
+  auction:SetHeight(40)
+  applyQuietPanel(auction, false)
+  local auctionLabel = sectionLabel(auction, "Auction")
+  auctionLabel:SetPoint("LEFT", auction, "LEFT", 10, 0)
+
+  local quickBtn = CreateFrame("Button", "OnyxiaGoldQuickScanButton", auction, "UIPanelButtonTemplate")
+  quickBtn:SetWidth(112)
+  quickBtn:SetHeight(BUTTON_HEIGHT)
+  quickBtn:SetPoint("LEFT", auction, "LEFT", 78, 0)
   quickBtn:SetText("Quick Scan")
   quickBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Quick Scan clicked")
     OnyxiaGold.Scanner:StartQuick()
   end)
 
-  local fullBtn = CreateFrame("Button", "OnyxiaGoldFullScanButton", frame, "UIPanelButtonTemplate")
-  fullBtn:SetWidth(90)
-  fullBtn:SetHeight(22)
+  local fullBtn = CreateFrame("Button", "OnyxiaGoldFullScanButton", auction, "UIPanelButtonTemplate")
+  fullBtn:SetWidth(100)
+  fullBtn:SetHeight(BUTTON_HEIGHT)
   fullBtn:SetPoint("LEFT", quickBtn, "RIGHT", 8, 0)
   fullBtn:SetText("Full Scan")
   fullBtn:SetScript("OnClick", function()
@@ -364,9 +487,9 @@ function UI:Create()
     OnyxiaGold.Scanner:StartFull()
   end)
 
-  local refreshBtn = CreateFrame("Button", "OnyxiaGoldRefreshButton", frame, "UIPanelButtonTemplate")
-  refreshBtn:SetWidth(90)
-  refreshBtn:SetHeight(22)
+  local refreshBtn = CreateFrame("Button", "OnyxiaGoldRefreshButton", auction, "UIPanelButtonTemplate")
+  refreshBtn:SetWidth(96)
+  refreshBtn:SetHeight(BUTTON_HEIGHT)
   refreshBtn:SetPoint("LEFT", fullBtn, "RIGHT", 8, 0)
   refreshBtn:SetText("Refresh")
   refreshBtn:SetScript("OnClick", function()
@@ -374,63 +497,158 @@ function UI:Create()
     OnyxiaGold.OpportunityEngine:Refresh()
   end)
 
-  local goldBtn = CreateFrame("Button", "OnyxiaGoldCollectGoldButton", frame, "UIPanelButtonTemplate")
-  goldBtn:SetWidth(110)
-  goldBtn:SetHeight(22)
-  goldBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 12)
-  goldBtn:SetText("Collect Gold")
-  goldBtn:SetScript("OnClick", function()
-    if OnyxiaGold.MailProcessor then
-      OnyxiaGold.MailProcessor:CollectGold(true)
-    end
-    OnyxiaGold.UI:ShowFactoryMail()
-  end)
-  goldBtn:SetScript("OnEnter", function(self)
-    if not GameTooltip then
+  local scanBar = CreateFrame("StatusBar", "OnyxiaGoldScanBar", auction)
+  scanBar:SetPoint("LEFT", refreshBtn, "RIGHT", 12, 0)
+  scanBar:SetPoint("RIGHT", auction, "RIGHT", -10, 0)
+  scanBar:SetHeight(16)
+  scanBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+  scanBar:SetStatusBarColor(0.86, 0.62, 0.12)
+  scanBar:SetMinMaxValues(0, 1)
+  scanBar:SetValue(0)
+  local scanBarBg = scanBar:CreateTexture(nil, "BACKGROUND")
+  scanBarBg:SetAllPoints(scanBar)
+  scanBarBg:SetTexture(0.12, 0.1, 0.06, 0.9)
+  local scanBarText = scanBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  scanBarText:SetPoint("LEFT", scanBar, "LEFT", 6, 0)
+  scanBarText:SetPoint("RIGHT", scanBar, "RIGHT", -6, 0)
+  scanBarText:SetJustifyH("CENTER")
+  scanBarText:SetJustifyV("MIDDLE")
+  scanBarText:SetTextColor(1, 0.96, 0.86)
+  scanBarText:SetShadowOffset(1, -1)
+  scanBarText:SetShadowColor(0, 0, 0, 1)
+  scanBarText:SetText("")
+  scanBar:Hide()
+
+  local options = CreateFrame("Frame", "OnyxiaGoldOptionsSection", frame)
+  options:SetPoint("TOPLEFT", auction, "BOTTOMLEFT", 0, -6)
+  options:SetPoint("TOPRIGHT", auction, "BOTTOMRIGHT", 0, -6)
+  options:SetHeight(40)
+  applyQuietPanel(options, false)
+  local optionsLabel = sectionLabel(options, "Options")
+  optionsLabel:SetPoint("LEFT", options, "LEFT", 10, 0)
+
+  local function pinCheckLabel(fs, width)
+    if not fs then
       return
     end
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Collect Gold", 1, 0.82, 0)
-    GameTooltip:AddLine("Stand at a mailbox. Each click takes one auction-house sale payment. It does not take items, personal mail, or cash-on-delivery. Click again for the next payment.", 1, 1, 1, 1)
-    GameTooltip:Show()
-  end)
-  goldBtn:SetScript("OnLeave", function()
-    if GameTooltip then
-      GameTooltip:Hide()
-    end
+    fs:SetWordWrap(false)
+    fs:SetWidth(width)
+    fs:SetJustifyH("LEFT")
+    fs:SetJustifyV("MIDDLE")
+  end
+
+  local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", options, "UICheckButtonTemplate")
+  master:SetWidth(24)
+  master:SetHeight(24)
+  master:SetPoint("LEFT", options, "LEFT", 78, 0)
+  local masterText = getglobal("OnyxiaGoldMasterCheckText")
+  if masterText then
+    masterText:SetText("Force TM")
+    pinCheckLabel(masterText, 90)
+  end
+  master:SetScript("OnClick", function(self)
+    OnyxiaGold.Database:Ensure()
+    local on = self:GetChecked() and true or false
+    OnyxiaGoldDB.settings.transmuteMasterOverride = on
+    OnyxiaGoldDB.settings.transmuteMaster = on
+    OnyxiaGold.Log:Info("UI", "Transmute Master override " .. tostring(on))
+    OnyxiaGold.OpportunityEngine:Refresh()
   end)
 
-  local sweepBtn = CreateFrame("Button", "OnyxiaGoldFactorySweepButton", frame, "UIPanelButtonTemplate")
-  sweepBtn:SetWidth(110)
-  sweepBtn:SetHeight(22)
-  sweepBtn:SetPoint("LEFT", goldBtn, "RIGHT", 6, 0)
-  sweepBtn:SetText("Factory Sweep")
-  sweepBtn:SetScript("OnClick", function()
-    if OnyxiaGold.MailProcessor then
-      OnyxiaGold.MailProcessor:Sweep(true)
+  local skillPreview = CreateFrame("CheckButton", "OnyxiaGoldSkillPreviewCheck", options, "UICheckButtonTemplate")
+  skillPreview:SetWidth(24)
+  skillPreview:SetHeight(24)
+  skillPreview:SetPoint("LEFT", options, "LEFT", 220, 0)
+  local skillText = getglobal("OnyxiaGoldSkillPreviewCheckText")
+  if skillText then
+    skillText:SetText("Show above my skill")
+    pinCheckLabel(skillText, 170)
+  end
+  skillPreview:SetScript("OnClick", function(self)
+    OnyxiaGold.Database:Ensure()
+    local on = self:GetChecked() and true or false
+    OnyxiaGoldDB.settings.showAboveSkill = on
+    OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
     end
-    OnyxiaGold.UI:ShowFactoryMail()
-  end)
-  sweepBtn:SetScript("OnEnter", function(self)
-    if not GameTooltip then
-      return
-    end
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Factory Sweep", 1, 0.82, 0)
-    GameTooltip:AddLine("Stand at a mailbox. Each click takes the next safe auction-house mail: sale gold first, then items this list planned to buy, then other won or purchased items, then expired and cancelled auctions. It never takes personal mail, cash-on-delivery, or unknown mail. An item needs a free bag slot.", 1, 1, 1, 1)
-    GameTooltip:Show()
-  end)
-  sweepBtn:SetScript("OnLeave", function()
-    if GameTooltip then
-      GameTooltip:Hide()
-    end
+    OnyxiaGold.UI:Refresh()
   end)
 
-  local heldBtn = CreateFrame("Button", "OnyxiaGoldHeldButton", frame, "UIPanelButtonTemplate")
-  heldBtn:SetWidth(70)
-  heldBtn:SetHeight(22)
-  heldBtn:SetPoint("LEFT", refreshBtn, "RIGHT", 6, 0)
-  heldBtn:SetText("Held")
+  local goldPreview = CreateFrame("CheckButton", "OnyxiaGoldGoldPreviewCheck", options, "UICheckButtonTemplate")
+  goldPreview:SetWidth(24)
+  goldPreview:SetHeight(24)
+  goldPreview:SetPoint("LEFT", options, "LEFT", 450, 0)
+  local goldText = getglobal("OnyxiaGoldGoldPreviewCheckText")
+  if goldText then
+    goldText:SetText("Show beyond my gold")
+    pinCheckLabel(goldText, 170)
+  end
+  goldPreview:SetScript("OnClick", function(self)
+    OnyxiaGold.Database:Ensure()
+    local on = self:GetChecked() and true or false
+    OnyxiaGoldDB.settings.showBeyondGold = on
+    OnyxiaGold.Log:Info("UI", "Show beyond my gold " .. tostring(on))
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
+    end
+    OnyxiaGold.UI:Refresh()
+  end)
+
+  local summary = CreateFrame("Frame", "OnyxiaGoldSummarySection", frame)
+  summary:SetPoint("TOPLEFT", options, "BOTTOMLEFT", 0, -6)
+  summary:SetPoint("TOPRIGHT", options, "BOTTOMRIGHT", 0, -6)
+  summary:SetHeight(76)
+  applyQuietPanel(summary, false)
+
+  local function stackLine(fs, y)
+    fs:ClearAllPoints()
+    fs:SetPoint("TOPLEFT", summary, "TOPLEFT", 10, y)
+    fs:SetPoint("TOPRIGHT", summary, "TOPRIGHT", -10, y)
+    fs:SetHeight(12)
+    fs:SetJustifyH("LEFT")
+    fs:SetJustifyV("MIDDLE")
+    fs:SetWordWrap(false)
+  end
+
+  local identity = addLabel(summary, "", "GameFontHighlightSmall")
+  stackLine(identity, -2)
+  local professions = addLabel(summary, "", "GameFontDisableSmall")
+  stackLine(professions, -14)
+  local factory = addLabel(summary, "", "GameFontDisableSmall")
+  stackLine(factory, -26)
+  local capital = addLabel(summary, "", "GameFontHighlightSmall")
+  stackLine(capital, -38)
+  local deploy = addLabel(summary, "", "GameFontNormalSmall")
+  stackLine(deploy, -50)
+  setRGB(deploy, 0.35, 0.85, 0.45)
+  local market = addLabel(summary, "Market: —", "GameFontDisableSmall")
+  stackLine(market, -62)
+
+  local capitalHit = CreateFrame("Frame", "OnyxiaGoldCapitalHit", summary)
+  capitalHit:SetPoint("TOPLEFT", capital, "TOPLEFT", -2, 2)
+  capitalHit:SetPoint("BOTTOMRIGHT", deploy, "BOTTOMRIGHT", 2, -2)
+  capitalHit:EnableMouse(true)
+  capitalHit:SetScript("OnEnter", function()
+    UI:ShowCapitalTooltip(capitalHit)
+  end)
+  capitalHit:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+
+  local mail = CreateFrame("Frame", "OnyxiaGoldMailSection", frame)
+  mail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, 20)
+  mail:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 20)
+  mail:SetHeight(40)
+  applyQuietPanel(mail, false)
+  local mailLabel = sectionLabel(mail, "Mail")
+  mailLabel:SetPoint("LEFT", mail, "LEFT", 10, 0)
+
+  local heldBtn = CreateFrame("Button", "OnyxiaGoldHeldButton", mail, "UIPanelButtonTemplate")
+  heldBtn:SetWidth(88)
+  heldBtn:SetHeight(BUTTON_HEIGHT)
+  heldBtn:SetPoint("LEFT", mail, "LEFT", 64, 0)
+  heldBtn:SetText("In bags")
   heldBtn:SetScript("OnClick", function()
     if UI.listMode == "inventory" then
       UI.listMode = "actions"
@@ -444,7 +662,7 @@ function UI:Create()
       return
     end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Held", 1, 0.82, 0)
+    GameTooltip:SetText("In bags", 1, 0.82, 0)
     GameTooltip:AddLine("Switches this list between What to do now and the items in your bags. Each held row shows what it is worth, where it sits, and a badge for what to do with it: use, disenchant, sell, vendor, or wait. Click again to return to What to do now.", 1, 1, 1, 1)
     GameTooltip:Show()
   end)
@@ -454,120 +672,153 @@ function UI:Create()
     end
   end)
 
-  local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")
-  master:SetWidth(24)
-  master:SetHeight(24)
-  master:SetPoint("LEFT", heldBtn, "RIGHT", 8, 0)
-  local masterText = getglobal("OnyxiaGoldMasterCheckText")
-  if masterText then
-    masterText:SetText("Force TM")
-  end
-  master:SetScript("OnClick", function(self)
-    OnyxiaGold.Database:Ensure()
-    local on = self:GetChecked() and true or false
-    OnyxiaGoldDB.settings.transmuteMasterOverride = on
-    OnyxiaGoldDB.settings.transmuteMaster = on
-    OnyxiaGold.Log:Info("UI", "Transmute Master override " .. tostring(on))
-    OnyxiaGold.OpportunityEngine:Refresh()
-  end)
-
-  local skillPreview = CreateFrame("CheckButton", "OnyxiaGoldSkillPreviewCheck", frame, "UICheckButtonTemplate")
-  skillPreview:SetWidth(24)
-  skillPreview:SetHeight(24)
-  if masterText then
-    skillPreview:SetPoint("LEFT", masterText, "RIGHT", 18, 0)
-  else
-    skillPreview:SetPoint("LEFT", master, "RIGHT", 88, 0)
-  end
-  local skillText = getglobal("OnyxiaGoldSkillPreviewCheckText")
-  if skillText then
-    skillText:SetText("Show above my skill")
-  end
-  skillPreview:SetScript("OnClick", function(self)
-    OnyxiaGold.Database:Ensure()
-    local on = self:GetChecked() and true or false
-    OnyxiaGoldDB.settings.showAboveSkill = on
-    OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-      OnyxiaGold.ActionPlanner:Refresh()
+  local goldBtn = CreateFrame("Button", "OnyxiaGoldCollectGoldButton", mail, "UIPanelButtonTemplate")
+  goldBtn:SetWidth(100)
+  goldBtn:SetHeight(BUTTON_HEIGHT)
+  goldBtn:SetPoint("LEFT", heldBtn, "RIGHT", 12, 0)
+  goldBtn:SetText("Take gold")
+  goldBtn:SetScript("OnClick", function()
+    if OnyxiaGold.MailProcessor then
+      OnyxiaGold.MailProcessor:CollectGold(true)
     end
-    OnyxiaGold.UI:Refresh()
+    OnyxiaGold.UI:ShowFactoryMail()
   end)
-
-  local goldPreview = CreateFrame("CheckButton", "OnyxiaGoldGoldPreviewCheck", frame, "UICheckButtonTemplate")
-  goldPreview:SetWidth(24)
-  goldPreview:SetHeight(24)
-  if skillText then
-    goldPreview:SetPoint("LEFT", skillText, "RIGHT", 18, 0)
-  else
-    goldPreview:SetPoint("LEFT", skillPreview, "RIGHT", 160, 0)
-  end
-  local goldText = getglobal("OnyxiaGoldGoldPreviewCheckText")
-  if goldText then
-    goldText:SetText("Show beyond my gold")
-  end
-  goldPreview:SetScript("OnClick", function(self)
-    OnyxiaGold.Database:Ensure()
-    local on = self:GetChecked() and true or false
-    OnyxiaGoldDB.settings.showBeyondGold = on
-    OnyxiaGold.Log:Info("UI", "Show beyond my gold " .. tostring(on))
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-      OnyxiaGold.ActionPlanner:Refresh()
+  goldBtn:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
     end
-    OnyxiaGold.UI:Refresh()
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Take gold", 1, 0.82, 0)
+    GameTooltip:AddLine("Stand at a mailbox. Each click takes one auction-house sale payment. It does not take items, personal mail, or cash-on-delivery. Click again for the next payment.", 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  goldBtn:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
   end)
 
-  local identity = addLabel(frame, "", "GameFontHighlightSmall")
-  identity:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -72)
-  identity:SetJustifyH("LEFT")
-
-  local professions = addLabel(frame, "", "GameFontDisableSmall")
-  professions:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -90)
-  professions:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -90)
-  professions:SetJustifyH("LEFT")
-
-  local factory = addLabel(frame, "", "GameFontDisableSmall")
-  factory:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -108)
-  factory:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -108)
-  factory:SetJustifyH("LEFT")
-
-  local capital = addLabel(frame, "", "GameFontHighlightSmall")
-  capital:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -128)
-  capital:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -128)
-  capital:SetJustifyH("LEFT")
-
-  local deploy = addLabel(frame, "", "GameFontNormalSmall")
-  deploy:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -146)
-  deploy:SetJustifyH("LEFT")
-  setRGB(deploy, 0.35, 0.85, 0.45)
-
-  local market = addLabel(frame, "Market: —", "GameFontDisableSmall")
-  market:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -164)
-  market:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -164)
-  market:SetJustifyH("LEFT")
-
-  local capitalHit = CreateFrame("Frame", "OnyxiaGoldCapitalHit", frame)
-  capitalHit:SetPoint("TOPLEFT", capital, "TOPLEFT", 0, 4)
-  capitalHit:SetPoint("BOTTOMRIGHT", deploy, "BOTTOMRIGHT", 280, -4)
-  capitalHit:EnableMouse(true)
-  capitalHit:SetScript("OnEnter", function()
-    UI:ShowCapitalTooltip(capitalHit)
+  local sweepBtn = CreateFrame("Button", "OnyxiaGoldFactorySweepButton", mail, "UIPanelButtonTemplate")
+  sweepBtn:SetWidth(100)
+  sweepBtn:SetHeight(BUTTON_HEIGHT)
+  sweepBtn:SetPoint("LEFT", goldBtn, "RIGHT", 12, 0)
+  sweepBtn:SetText("Take mail")
+  sweepBtn:SetScript("OnClick", function()
+    if OnyxiaGold.MailProcessor then
+      OnyxiaGold.MailProcessor:Sweep(true)
+    end
+    OnyxiaGold.UI:ShowFactoryMail()
   end)
-  capitalHit:SetScript("OnLeave", function()
+  sweepBtn:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Take mail", 1, 0.82, 0)
+    GameTooltip:AddLine("Stand at a mailbox. Each click takes the next safe auction-house mail: sale gold first, then items this list planned to buy, then other won or purchased items, then expired and cancelled auctions. It never takes personal mail, cash-on-delivery, or unknown mail. An item needs a free bag slot.", 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  sweepBtn:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
+  end)
+
+  local trades = CreateFrame("Frame", "OnyxiaGoldTradesSection", frame)
+  trades:SetPoint("BOTTOMLEFT", mail, "TOPLEFT", 0, 6)
+  trades:SetPoint("BOTTOMRIGHT", mail, "TOPRIGHT", 0, 6)
+  trades:SetHeight(64)
+  applyQuietPanel(trades, false)
+
+  local tradeTitle = addLabel(trades, "Trades", "GameFontNormalSmall")
+  tradeTitle:SetPoint("TOPLEFT", trades, "TOPLEFT", 10, -6)
+  setRGB(tradeTitle, 1, 0.82, 0)
+
+  local tradeCopy = CreateFrame("Button", "OnyxiaGoldTradeCopyButton", trades, "UIPanelButtonTemplate")
+  tradeCopy:SetWidth(56)
+  tradeCopy:SetHeight(BUTTON_HEIGHT)
+  tradeCopy:SetPoint("TOPRIGHT", trades, "TOPRIGHT", -8, -4)
+  tradeCopy:SetText("Copy")
+  tradeCopy:SetScript("OnClick", function()
+    UI:CopyTrades()
+  end)
+  tradeCopy:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Select the trade lines, then Ctrl+C", 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  tradeCopy:SetScript("OnLeave", function()
     GameTooltip:Hide()
   end)
 
-  local header = CreateFrame("Frame", "OnyxiaGoldHeader", frame)
-  header:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, HEADER_Y)
-  header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -36, HEADER_Y)
-  header:SetHeight(18)
+  local tradeTotals = addLabel(trades, "", "GameFontHighlightSmall")
+  tradeTotals:SetPoint("LEFT", tradeTitle, "RIGHT", 12, 0)
+  tradeTotals:SetPoint("RIGHT", tradeCopy, "LEFT", -8, 0)
+  tradeTotals:SetJustifyH("LEFT")
+  tradeTotals:SetWordWrap(false)
 
-  local x = 0
+  local tradeScroll = CreateFrame("ScrollFrame", "OnyxiaGoldTradeScroll", trades, "UIPanelScrollFrameTemplate")
+  tradeScroll:SetPoint("TOPLEFT", trades, "TOPLEFT", 8, -28)
+  tradeScroll:SetPoint("BOTTOMRIGHT", trades, "BOTTOMRIGHT", -26, 6)
+  tradeScroll:EnableMouseWheel(1)
+  tradeScroll:SetScript("OnMouseWheel", function(self, delta)
+    local bar = getglobal(self:GetName() .. "ScrollBar")
+    if not bar then
+      return
+    end
+    local step = 28
+    local value = bar:GetValue() or 0
+    if delta > 0 then
+      value = value - step
+    else
+      value = value + step
+    end
+    local minV, maxV = bar:GetMinMaxValues()
+    if value < (minV or 0) then
+      value = minV or 0
+    end
+    if value > (maxV or 0) then
+      value = maxV or 0
+    end
+    bar:SetValue(value)
+  end)
+
+  local tradeEdit = CreateFrame("EditBox", "OnyxiaGoldTradeEdit", tradeScroll)
+  tradeEdit:SetMultiLine(true)
+  tradeEdit:SetAutoFocus(false)
+  tradeEdit:SetFontObject(GameFontHighlightSmall)
+  tradeEdit:SetWidth(960)
+  tradeEdit:SetHeight(40)
+  tradeEdit:SetMaxLetters(999999)
+  tradeEdit:SetScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+  end)
+  tradeEdit:SetScript("OnTextChanged", function(self)
+    if self.freeze and self.frozenText and self:GetText() ~= self.frozenText then
+      self:SetText(self.frozenText)
+    end
+  end)
+  tradeScroll:SetScrollChild(tradeEdit)
+
+  local listPanel = CreateFrame("Frame", "OnyxiaGoldListSection", frame)
+  listPanel:SetPoint("TOPLEFT", summary, "BOTTOMLEFT", 0, -6)
+  listPanel:SetPoint("BOTTOMRIGHT", trades, "TOPRIGHT", 0, 6)
+  applyQuietPanel(listPanel, true)
+
+  local listTitle = sectionLabel(listPanel, "What to do now")
+  listTitle:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 10, -6)
+  listTitle:SetHeight(14)
+
+  local header = CreateFrame("Frame", "OnyxiaGoldHeader", listPanel)
+  header:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 8, -24)
+  header:SetPoint("TOPRIGHT", listPanel, "TOPRIGHT", -26, -24)
+  header:SetHeight(16)
+
   local headerCells = {}
   for i = 1, table.getn(COLS) do
     local col = COLS[i]
     local fs = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    fs:SetPoint("LEFT", header, "LEFT", x, 0)
+    fs:SetPoint("LEFT", header, "LEFT", 0, 0)
     fs:SetWidth(col.width)
     fs:SetJustifyH(col.justify)
     fs:SetJustifyV("MIDDLE")
@@ -575,18 +826,17 @@ function UI:Create()
     fs:SetText(col.label)
     headerCells[col.key] = fs
     setRGB(fs, 1, 0.82, 0)
-    x = x + col.width + COL_GAP
   end
 
-  local headerRule = header:CreateTexture(nil, "BORDER")
-  headerRule:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 0, -4)
-  headerRule:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", 0, -4)
+  local headerRule = header:CreateTexture(nil, "ARTWORK")
+  headerRule:SetPoint("BOTTOMLEFT", header, "BOTTOMLEFT", 0, -1)
+  headerRule:SetPoint("BOTTOMRIGHT", header, "BOTTOMRIGHT", 0, -1)
   headerRule:SetHeight(1)
   headerRule:SetTexture(0.85, 0.68, 0.25, 0.85)
 
-  local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", frame, "FauxScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, LIST_TOP)
-  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, LIST_BOTTOM)
+  local scroll = CreateFrame("ScrollFrame", "OnyxiaGoldListScroll", listPanel, "FauxScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", listPanel, "TOPLEFT", 4, -42)
+  scroll:SetPoint("BOTTOMRIGHT", listPanel, "BOTTOMRIGHT", -4, 24)
   scroll.offset = 0
   scroll:EnableMouseWheel(1)
   scroll:SetScript("OnVerticalScroll", function(self, value)
@@ -632,12 +882,21 @@ function UI:Create()
     end
   end)
 
+  local status = addLabel(listPanel, "Open the Auction House, then Quick Scan.", "GameFontDisableSmall")
+  status:SetPoint("BOTTOMLEFT", listPanel, "BOTTOMLEFT", 10, 5)
+  status:SetPoint("BOTTOMRIGHT", listPanel, "BOTTOMRIGHT", -10, 5)
+  status:SetHeight(14)
+  status:SetJustifyH("LEFT")
+  status:SetJustifyV("MIDDLE")
+  status:SetWordWrap(false)
+
   local rows = {}
   for i = 1, NUM_ROWS do
     local row = CreateFrame("Button", "OnyxiaGoldRow" .. i, frame)
     row:SetHeight(ROW_HEIGHT)
     row:SetPoint("LEFT", scroll, "LEFT", 4, 0)
-    row:SetPoint("RIGHT", scroll, "RIGHT", -4, 0)
+    row:SetPoint("RIGHT", scroll, "RIGHT", -22, 0)
+    row:SetFrameLevel(frame:GetFrameLevel() + 4)
     if i == 1 then
       row:SetPoint("TOP", scroll, "TOP", 0, 0)
     else
@@ -652,17 +911,16 @@ function UI:Create()
     end
 
     row.cells = {}
-    local cx = 0
     for c = 1, table.getn(COLS) do
       local col = COLS[c]
       local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-      fs:SetPoint("LEFT", row, "LEFT", cx, 0)
+      fs:SetPoint("LEFT", row, "LEFT", 0, 0)
       fs:SetWidth(col.width)
       fs:SetJustifyH(col.justify)
       fs:SetJustifyV("MIDDLE")
       fs:SetText("")
       if col.key == "name" then
-        fs:SetHeight(ROW_HEIGHT - 6)
+        fs:SetHeight(ROW_HEIGHT - 8)
         fs:SetJustifyV("TOP")
         fs:SetWordWrap(true)
         fs:SetNonSpaceWrap(false)
@@ -670,7 +928,6 @@ function UI:Create()
         fs:SetWordWrap(false)
       end
       row.cells[col.key] = fs
-      cx = cx + col.width + COL_GAP
     end
 
     row:RegisterForClicks("LeftButtonUp")
@@ -704,104 +961,6 @@ function UI:Create()
     rows[i] = row
   end
 
-  local status = addLabel(frame, "Open the Auction House, then Quick Scan.", "GameFontDisable")
-  status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 16)
-  status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -28, 16)
-  status:SetJustifyH("LEFT")
-
-  local scanBar = CreateFrame("StatusBar", "OnyxiaGoldScanBar", frame)
-  scanBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 36)
-  scanBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -28, 36)
-  scanBar:SetHeight(16)
-  scanBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
-  scanBar:SetStatusBarColor(0.86, 0.62, 0.12)
-  scanBar:SetMinMaxValues(0, 1)
-  scanBar:SetValue(0)
-  local scanBarBg = scanBar:CreateTexture(nil, "BACKGROUND")
-  scanBarBg:SetAllPoints(scanBar)
-  scanBarBg:SetTexture(0.12, 0.1, 0.06, 0.9)
-  local scanBarText = scanBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  scanBarText:SetPoint("LEFT", scanBar, "LEFT", 6, 0)
-  scanBarText:SetPoint("RIGHT", scanBar, "RIGHT", -6, 0)
-  scanBarText:SetJustifyH("CENTER")
-  scanBarText:SetJustifyV("MIDDLE")
-  scanBarText:SetTextColor(1, 0.96, 0.86)
-  scanBarText:SetShadowOffset(1, -1)
-  scanBarText:SetShadowColor(0, 0, 0, 1)
-  scanBarText:SetText("")
-  scanBar:Hide()
-
-  local tradeTitle = addLabel(frame, "Trades", "GameFontNormalSmall")
-  tradeTitle:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 182)
-  setRGB(tradeTitle, 1, 0.82, 0)
-
-  local tradeCopy = CreateFrame("Button", "OnyxiaGoldTradeCopyButton", frame, "UIPanelButtonTemplate")
-  tradeCopy:SetWidth(56)
-  tradeCopy:SetHeight(20)
-  tradeCopy:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 178)
-  tradeCopy:SetText("Copy")
-  tradeCopy:SetScript("OnClick", function()
-    UI:CopyTrades()
-  end)
-  tradeCopy:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText("Select the trade lines, then Ctrl+C", 1, 1, 1)
-    GameTooltip:Show()
-  end)
-  tradeCopy:SetScript("OnLeave", function()
-    GameTooltip:Hide()
-  end)
-
-  local tradeTotals = addLabel(frame, "", "GameFontHighlightSmall")
-  tradeTotals:SetPoint("LEFT", tradeTitle, "RIGHT", 12, 0)
-  tradeTotals:SetPoint("RIGHT", tradeCopy, "LEFT", -12, 0)
-  tradeTotals:SetJustifyH("LEFT")
-  tradeTotals:SetWordWrap(false)
-
-  local tradeScroll = CreateFrame("ScrollFrame", "OnyxiaGoldTradeScroll", frame, "UIPanelScrollFrameTemplate")
-  tradeScroll:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 56)
-  tradeScroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 56)
-  tradeScroll:SetHeight(118)
-  tradeScroll:EnableMouseWheel(1)
-  tradeScroll:SetScript("OnMouseWheel", function(self, delta)
-    local bar = getglobal(self:GetName() .. "ScrollBar")
-    if not bar then
-      return
-    end
-    local step = 28
-    local value = bar:GetValue() or 0
-    if delta > 0 then
-      value = value - step
-    else
-      value = value + step
-    end
-    local minV, maxV = bar:GetMinMaxValues()
-    if value < (minV or 0) then
-      value = minV or 0
-    end
-    if value > (maxV or 0) then
-      value = maxV or 0
-    end
-    bar:SetValue(value)
-  end)
-
-  local tradeEdit = CreateFrame("EditBox", "OnyxiaGoldTradeEdit", tradeScroll)
-  tradeEdit:SetMultiLine(true)
-  tradeEdit:SetAutoFocus(false)
-  tradeEdit:SetFontObject(GameFontHighlightSmall)
-  tradeEdit:SetWidth(960)
-  tradeEdit:SetHeight(118)
-  tradeEdit:SetMaxLetters(999999)
-  tradeEdit:SetScript("OnEscapePressed", function(self)
-    self:ClearFocus()
-  end)
-  tradeEdit:SetScript("OnTextChanged", function(self)
-    if self.freeze and self.frozenText and self:GetText() ~= self.frozenText then
-      self:SetText(self.frozenText)
-    end
-  end)
-  tradeScroll:SetScrollChild(tradeEdit)
-
   local grip = CreateFrame("Button", "OnyxiaGoldResizeGrip", frame)
   grip:SetWidth(16)
   grip:SetHeight(16)
@@ -833,6 +992,7 @@ function UI:Create()
 
   frame:SetScript("OnSizeChanged", function()
     if UI.rows then
+      UI:LayoutColumns()
       UI:UpdateList()
     end
     UI:SaveWindowSize()
@@ -860,9 +1020,12 @@ function UI:Create()
   self.tradeScroll = tradeScroll
   self.tradeEdit = tradeEdit
   self.tradeTotals = tradeTotals
+  self.header = header
   self.headerCells = headerCells
+  self.listTitle = listTitle
   self.heldButton = heldBtn
   self.listMode = "actions"
+  self:LayoutColumns()
 end
 
 function UI:ShowCapitalTooltip(owner)
@@ -983,7 +1146,7 @@ local BADGE_COLOR = {
 }
 
 local INVENTORY_HEADERS = {
-  name = "Held item",
+  name = "Item",
   profit = "Worth",
   cash = "Place",
   crafts = "Badge",
@@ -996,6 +1159,13 @@ local function paintHeaders(self)
     return
   end
   local inventory = self.listMode == "inventory"
+  if self.listTitle then
+    if inventory then
+      self.listTitle:SetText("In bags")
+    else
+      self.listTitle:SetText("What to do now")
+    end
+  end
   for i = 1, table.getn(COLS) do
     local col = COLS[i]
     local fs = cells[col.key]
@@ -1484,16 +1654,23 @@ function UI:AcceptHouseConfirm()
 end
 
 function UI:VisibleRowCount()
-  local frame = self.frame
-  if not frame or not frame.GetHeight then
-    return NUM_ROWS
+  local height
+  local scroll = self.scroll
+  if scroll and scroll.GetHeight then
+    height = tonumber(scroll:GetHeight())
   end
-  local height = tonumber(frame:GetHeight())
   if not height or height <= 0 then
-    return NUM_ROWS
+    local frame = self.frame
+    local frameHeight = frame and frame.GetHeight and tonumber(frame:GetHeight())
+    if frameHeight and frameHeight > 0 then
+      -- Title, auction, options, summary, list chrome, trades, and mail.
+      height = frameHeight - 418
+    end
   end
-  local listHeight = height - (0 - LIST_TOP) - LIST_BOTTOM
-  local count = math.floor(listHeight / ROW_HEIGHT)
+  if not height or height <= 0 then
+    return 1
+  end
+  local count = math.floor(height / ROW_HEIGHT)
   if count < 1 then
     count = 1
   end
@@ -1581,6 +1758,7 @@ function UI:UpdateList()
   if not self.rows then
     return
   end
+  self:LayoutColumns()
   paintHeaders(self)
   if self.listMode == "inventory" then
     self:UpdateInventoryList()
@@ -1766,7 +1944,14 @@ function UI:RefreshTrades()
   if text == "" then
     lines = 1
   end
-  edit:SetHeight(math.max(118, lines * 14 + 20))
+  local minH = 36
+  if self.tradeScroll and self.tradeScroll.GetHeight then
+    local scrollH = tonumber(self.tradeScroll:GetHeight())
+    if scrollH and scrollH > 20 then
+      minH = scrollH
+    end
+  end
+  edit:SetHeight(math.max(minH, lines * 14 + 8))
   if self.tradeScroll and self.tradeScroll.UpdateScrollChildRect then
     self.tradeScroll:UpdateScrollChildRect()
   end

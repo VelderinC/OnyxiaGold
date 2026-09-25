@@ -1604,12 +1604,19 @@ function UI:BuyStateText(state)
   return nil
 end
 
+local function auctionHouseOpen()
+  return AuctionFrame and AuctionFrame.IsShown and AuctionFrame:IsShown() and true or false
+end
+
 function UI:PaintBuyRow(row, action)
   local button = row.buyButton
   if button then
     button:Hide()
   end
   if not isBuyKind(action) then
+    return
+  end
+  if action.windowHint and not auctionHouseOpen() then
     return
   end
   local stop = OnyxiaGold.AuctionStop
@@ -1619,6 +1626,12 @@ function UI:PaintBuyRow(row, action)
   local state = stop:RowState(action)
   if not state then
     return
+  end
+  if state.status == "closed" then
+    local current = action.name or ""
+    if string.find(current, "Open the Auction House.", 1, true) then
+      return
+    end
   end
   local text = self:BuyStateText(state)
   if text and text ~= "" then
@@ -1686,10 +1699,6 @@ function UI:OnBuyClick(row)
   self:UpdateList()
 end
 
-local function auctionHouseOpen()
-  return AuctionFrame and AuctionFrame.IsShown and AuctionFrame:IsShown() and true or false
-end
-
 -- Largest unlocked bag stack of this item. Prefers a stack that covers need.
 local function bagStackForPost(itemID, need)
   itemID = tonumber(itemID)
@@ -1733,6 +1742,9 @@ function UI:PaintPostRow(row, action)
     button:Hide()
   end
   if not button or not action or action.kind ~= "POST" then
+    return
+  end
+  if not auctionHouseOpen() then
     return
   end
   button:Show()

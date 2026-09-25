@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.35 — Character errands
+
+- When the next step cannot be done from where you are, the line at the top names that errand first. The Auction House, when the next step is a buy or a post and that window is closed. The mailbox, when sale gold or a purchased item is waiting and the plan needs it. The bank, when the reagent or the transmutation stone is in the bank and not in the bags: withdraw that item. Alchemy or Enchanting, when the next step is a craft and that window is closed.
+- The buy, craft, or post stays underneath that errand. A Buy or Post button is not shown for a window that is closed. Take gold and Take mail stay one click each. Personal mail and cash-on-delivery stay put. A later sale is not cash.
+
 ## 0.1.34 — Direct flips
 
 - A flip buys one whole auction lot and posts it. It is not a craft. It is included only when the resale at the P25 of the rest of the book still clears the auction-house cut and the deposit, and that lot is less than a quarter of the book with at least two auctions left. It does not undercut your own auction, spend a later sale, or take a lot a craft already reserved.

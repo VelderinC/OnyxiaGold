@@ -11,8 +11,11 @@
   the recipe consumes what it needs, and the excess stays for the next action.
   Output units already planned are remembered here so the next action sees
   a thinner visible book. That count is not a sale rate.
-  Bank stock is not treated as bag stock. Cooldown groups are marked used
-  for this plan only; no timing numbers are invented.
+  Bank stock is not bag stock. A reagent or tool that is only in the bank
+  is withdrawn before it can be used, and it does not spend bag gold.
+  Purchase mail is not bag stock either. Personal mail and cash-on-delivery
+  are not stock. Cooldown groups are marked used for this plan only; no
+  timing numbers are invented.
   A purchase slot is freed when that same action crafts the reagent away.
   Leftover units from a whole lot keep the slots they still occupy, so the
   next action cannot use those slots. Peak occupancy for the action is
@@ -31,6 +34,9 @@ function Session:Reset()
   self.baseDeployable = 0
   self.baseAfterMail = 0
   self.bags = {}
+  self.bank = {}
+  self.mail = {}
+  self.equipped = {}
   self.depth = {}
   self.reserved = {}
   self.cooldowns = {}
@@ -45,21 +51,38 @@ end
 
 Session:Reset()
 
-local function copyBagSnapshot()
-  local bags = {}
-  local row = OnyxiaGold.Database and OnyxiaGold.Database:GetCharacter()
-  local source = row and row.inventory and row.inventory.bags
+local function copyCountMap(source)
+  local map = {}
   if type(source) ~= "table" then
-    return bags
+    return map
   end
   for itemID, count in pairs(source) do
     local id = tonumber(itemID)
     local n = tonumber(count) or 0
     if id and n > 0 then
-      bags[id] = n
+      map[id] = (map[id] or 0) + n
     end
   end
-  return bags
+  return map
+end
+
+local function copyBagSnapshot()
+  local row = OnyxiaGold.Database and OnyxiaGold.Database:GetCharacter()
+  local source = row and row.inventory and row.inventory.bags
+  return copyCountMap(source)
+end
+
+local function copyBankSnapshot()
+  local row = OnyxiaGold.Database and OnyxiaGold.Database:GetCharacter()
+  local source = row and row.bank and row.bank.items
+  return copyCountMap(source)
+end
+
+local function copyMailSnapshot()
+  if OnyxiaGold.Mail and OnyxiaGold.Mail.PurchaseItems then
+    return copyCountMap(OnyxiaGold.Mail:PurchaseItems())
+  end
+  return {}
 end
 
 -- New level tables. Callers must not pass these back into the database.
@@ -84,6 +107,9 @@ function Session:Begin(deployable, afterMailDeployable)
     self.baseAfterMail = 0
   end
   self.bags = copyBagSnapshot()
+  self.bank = copyBankSnapshot()
+  self.mail = copyMailSnapshot()
+  self.equipped = {}
   local inv = OnyxiaGold.Inventory
   if inv and inv.GetFreeGeneralSlots then
     self.freeSlots = inv:GetFreeGeneralSlots()
@@ -128,6 +154,34 @@ function Session:GetBagCount(itemID)
     return 0
   end
   return self.bags[itemID] or 0
+end
+
+function Session:GetBankCount(itemID)
+  itemID = tonumber(itemID)
+  if not itemID then
+    return 0
+  end
+  if self.active then
+    return (self.bank and self.bank[itemID]) or 0
+  end
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetBankCount then
+    return OnyxiaGold.Inventory:GetBankCount(itemID) or 0
+  end
+  return 0
+end
+
+function Session:GetMailCount(itemID)
+  itemID = tonumber(itemID)
+  if not itemID then
+    return 0
+  end
+  if self.active then
+    return (self.mail and self.mail[itemID]) or 0
+  end
+  if OnyxiaGold.Mail and OnyxiaGold.Mail.GetPurchaseCount then
+    return OnyxiaGold.Mail:GetPurchaseCount(itemID) or 0
+  end
+  return 0
 end
 
 function Session:EnsureDepth(itemID)
@@ -406,6 +460,8 @@ function Session:Reserve(spec)
     beforeBags[itemID] = count
     bags[itemID] = count
   end
+  local bankTake = {}
+  local mailTake = {}
   local leftCash = self.cash
   local quotedCash = 0
   local buyCount = 0
@@ -414,7 +470,9 @@ function Session:Reserve(spec)
     local itemID = tonumber(line.itemID)
     local ownedUnits = tonumber(line.ownedUnits) or 0
     local buyUnits = tonumber(line.buyUnits) or 0
-    if ownedUnits < 0 or buyUnits < 0 then
+    local bankUnits = tonumber(line.bankUnits) or 0
+    local mailUnits = tonumber(line.mailUnits) or 0
+    if ownedUnits < 0 or buyUnits < 0 or bankUnits < 0 or mailUnits < 0 then
       return false
     end
     if ownedUnits > 0 then
@@ -422,6 +480,22 @@ function Session:Reserve(spec)
         return false
       end
       bags[itemID] = bags[itemID] - ownedUnits
+    end
+    if bankUnits > 0 then
+      local already = bankTake[itemID] or 0
+      local have = (self.bank and itemID and self.bank[itemID]) or 0
+      if not itemID or have < already + bankUnits then
+        return false
+      end
+      bankTake[itemID] = already + bankUnits
+    end
+    if mailUnits > 0 then
+      local already = mailTake[itemID] or 0
+      local have = (self.mail and itemID and self.mail[itemID]) or 0
+      if not itemID or have < already + mailUnits then
+        return false
+      end
+      mailTake[itemID] = already + mailUnits
     end
     local purchased = 0
     local consumed = 0
@@ -503,6 +577,28 @@ function Session:Reserve(spec)
     self.depth[itemID] = book
   end
   self.bags = bags
+  if type(self.bank) ~= "table" then
+    self.bank = {}
+  end
+  for itemID, taken in pairs(bankTake) do
+    local left = (self.bank[itemID] or 0) - taken
+    if left > 0 then
+      self.bank[itemID] = left
+    else
+      self.bank[itemID] = nil
+    end
+  end
+  if type(self.mail) ~= "table" then
+    self.mail = {}
+  end
+  for itemID, taken in pairs(mailTake) do
+    local left = (self.mail[itemID] or 0) - taken
+    if left > 0 then
+      self.mail[itemID] = left
+    else
+      self.mail[itemID] = nil
+    end
+  end
   if self.freeSlots ~= nil then
     local seen = {}
     for itemID in pairs(beforeBags) do

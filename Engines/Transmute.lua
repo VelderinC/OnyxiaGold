@@ -48,12 +48,14 @@ function Transmute:Evaluate(def)
   end
   local net = OnyxiaGold:ApplyAuctionHouseCut(expectedGross)
 
-  local firstCost = prices:GetAcquisitionCost(inputID, inCount)
+  local marketCost = prices:GetAcquisitionCost(inputID, inCount)
+  local firstCost = marketCost
+  local pricedFromMarket = marketCost and marketCost > 0
   local owned = 0
   if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
     owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(inputID)
   end
-  if not firstCost or firstCost <= 0 then
+  if not pricedFromMarket then
     if owned >= inCount then
       local unit = prices:GetLiquidationPrice(inputID)
       if not unit or unit <= 0 then
@@ -76,20 +78,27 @@ function Transmute:Evaluate(def)
     return nil
   end
 
-  local batch = prices:GetMaxProfitableBatches(inputID, inCount, net)
-  local crafts = batch and batch.batches or 1
-  local ownedCrafts = math.floor(owned / inCount)
-  if ownedCrafts > crafts then
-    crafts = ownedCrafts
+  -- Market capacity only. Owned bars are reserved later by the planner.
+  local batch = nil
+  if pricedFromMarket then
+    batch = prices:GetMaxProfitableBatches(inputID, inCount, net)
   end
-  local totalProfit = batch and batch.totalProfit or (firstProfit * crafts)
-  if not batch and ownedCrafts > 1 then
-    totalProfit = firstProfit * ownedCrafts
+  local marketCrafts = 0
+  if batch and batch.batches and batch.batches > 0 then
+    marketCrafts = batch.batches
+  elseif pricedFromMarket then
+    marketCrafts = 1
   end
-  local avgProfit = crafts > 0 and math.floor(totalProfit / crafts) or firstProfit
+  local totalProfit = 0
+  if batch and batch.totalProfit then
+    totalProfit = batch.totalProfit
+  elseif marketCrafts > 0 then
+    totalProfit = firstProfit * marketCrafts
+  end
+  local avgProfit = marketCrafts > 0 and math.floor(totalProfit / marketCrafts) or firstProfit
   local inputQty = prices:GetBuyoutQuantity(inputID)
   local outputQty = prices:GetBuyoutQuantity(outputID)
-  local produced = crafts * outCount * expectedOutput
+  local produced = marketCrafts * outCount * expectedOutput
   local share
   if outputQty > 0 then
     share = produced / outputQty
@@ -99,7 +108,7 @@ function Transmute:Evaluate(def)
   local conf, confNotes = OnyxiaGold.OpportunityEngine:ComputeConfidence({
     oldestDataAge = ages,
     outputMarketQuantity = outputQty,
-    maxProfitableCrafts = crafts,
+    marketProfitableCrafts = marketCrafts,
     outputCount = outCount,
     expectedOutput = expectedOutput,
     hasDepth = prices:GetDepth(inputID) ~= nil,
@@ -109,8 +118,8 @@ function Transmute:Evaluate(def)
   notes = notes .. ". Sell-side uses P25 (fallback P10/min). Output market absorption is not modelled."
 
   OnyxiaGold.Log:Debug("Transmute", string.format(
-    "hit %s first=%d total=%d crafts=%d avgIn=%s outputEV=%.2f",
-    tostring(def.name), firstProfit, totalProfit, crafts,
+    "hit %s first=%d total=%d marketCrafts=%d avgIn=%s outputEV=%.2f",
+    tostring(def.name), firstProfit, totalProfit, marketCrafts,
     tostring(batch and batch.averageUnitCost), expectedOutput
   ))
 
@@ -123,8 +132,8 @@ function Transmute:Evaluate(def)
     netRevenue = net,
     expectedProfit = firstProfit,
     roi = firstProfit / firstCost,
-    availableQuantity = crafts,
-    maxProfitableCrafts = crafts,
+    availableQuantity = marketCrafts,
+    marketProfitableCrafts = marketCrafts,
     totalExpectedProfit = totalProfit,
     averageProfitPerCraft = avgProfit,
     averageUnitCost = batch and batch.averageUnitCost,

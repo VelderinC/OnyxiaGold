@@ -99,18 +99,67 @@ function Mail:ScanInbox()
     end
   end
 
+  local complete = numItems >= totalItems
   row.mail.claimableGold = claimable
   row.mail.pendingGold = pending
   row.mail.pendingEta = pendingEta
   row.mail.snapshotTimestamp = time()
+  row.mail.snapshotComplete = complete
+  row.mail.visibleCount = numItems
+  row.mail.totalCount = totalItems
+  -- Kept so older readers still see the same counts.
   row.mail.inboxCount = numItems
   row.mail.inboxTotal = totalItems
   row.stateTimestamps.mail = time()
 
   OnyxiaGold.Log:Debug("Mail", string.format(
-    "Inbox claimable=%d pending=%d items=%d",
-    claimable, pending, numItems
+    "Inbox claimable=%d pending=%d visible=%d total=%d complete=%s",
+    claimable, pending, numItems, totalItems, tostring(complete)
   ))
+end
+
+function Mail:IsSnapshotComplete()
+  local m = mailRow()
+  if not m or not m.snapshotTimestamp then
+    return nil
+  end
+  if m.snapshotComplete ~= nil then
+    return m.snapshotComplete and true or false
+  end
+  local visible = m.visibleCount or m.inboxCount
+  local total = m.totalCount or m.inboxTotal
+  if visible and total then
+    return visible >= total
+  end
+  return nil
+end
+
+function Mail:GetVisibleCount()
+  local m = mailRow()
+  if not m then
+    return nil
+  end
+  if m.visibleCount ~= nil then
+    return tonumber(m.visibleCount) or 0
+  end
+  if m.inboxCount ~= nil then
+    return tonumber(m.inboxCount) or 0
+  end
+  return nil
+end
+
+function Mail:GetTotalCount()
+  local m = mailRow()
+  if not m then
+    return nil
+  end
+  if m.totalCount ~= nil then
+    return tonumber(m.totalCount) or 0
+  end
+  if m.inboxTotal ~= nil then
+    return tonumber(m.inboxTotal) or 0
+  end
+  return nil
 end
 
 function Mail:GetClaimableGold()

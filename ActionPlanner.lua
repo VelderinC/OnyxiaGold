@@ -7,6 +7,13 @@
 
   Greedy on current deployable gold only. Expected sales are never cash.
   Owned bag materials reduce cashRequiredNow but keep economic opportunity cost.
+  Post-mail deployable comes from Capital:GetSpendableAfterMail(), which
+  reserves against liquid + claimable mail.
+
+  Capacity fields stay separate:
+    marketProfitableCrafts, physicalPossibleCrafts, affordableCrafts,
+    capabilityAllowedCrafts, executableCrafts, sensibleCrafts.
+  sensibleCrafts does not yet apply an output-liquidity model.
 
   Candidate classes (ranking remains data-driven, not a hard Alchemy > Enchanting order):
   zero-cash owned transforms, high-EV Alchemy, Enchanting destruction (v0.2.0),
@@ -40,23 +47,6 @@ local function meetsThreshold(profit)
     return false
   end
   return true
-end
-
-local function physicalCap(opp, owned)
-  local itemID, inCount = inputSpec(opp)
-  local fromMarket = tonumber(opp.maxProfitableCrafts) or 0
-  local buyoutQty = 0
-  if itemID and OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
-    buyoutQty = OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
-  end
-  local fromStock = 0
-  if inCount > 0 then
-    fromStock = math.floor(((owned or 0) + buyoutQty) / inCount)
-  end
-  if fromStock > fromMarket then
-    return fromStock
-  end
-  return fromMarket
 end
 
 -- cash, economicInput, ownedValue, complete
@@ -102,9 +92,12 @@ local function maxCraftsForCash(opp, owned, deployable, capMax)
   return lo
 end
 
-function Planner:Personalize(opp, deployable, claimable)
+function Planner:Personalize(opp, deployable, afterMailDeployable)
   deployable = tonumber(deployable) or 0
-  claimable = tonumber(claimable) or 0
+  -- 0 means the caller is ignoring mail (cash-allocation loop).
+  -- Otherwise this is Capital:GetSpendableAfterMail(), already reserve-adjusted,
+  -- minus gold this session has already assigned.
+  afterMailDeployable = tonumber(afterMailDeployable) or 0
   local itemID, inCount = inputSpec(opp)
   local owned = 0
   if itemID and OnyxiaGold.Inventory then
@@ -114,11 +107,37 @@ function Planner:Personalize(opp, deployable, claimable)
   if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
     cap = OnyxiaGold.Capabilities:CanExecute(opp.requirements)
   end
-  local maxProfitable = physicalCap(opp, owned)
-  if opp.requirements and opp.requirements.cooldown and maxProfitable > 1 then
-    maxProfitable = 1
+
+  local marketProfitable = tonumber(opp.marketProfitableCrafts)
+  if marketProfitable == nil then
+    marketProfitable = tonumber(opp.maxProfitableCrafts) or 0
   end
-  local capMax = maxProfitable
+  local buyoutQty = 0
+  if itemID and OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
+    buyoutQty = OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
+  end
+  local physical = 0
+  if inCount > 0 then
+    physical = math.floor(((owned or 0) + buyoutQty) / inCount)
+  end
+
+  -- Capability is not the same number as physical stock.
+  -- No cooldown cap: the character can perform every physically possible craft.
+  -- Cooldown: at most one. Missing profession/recipe/skill: zero.
+  local capabilityAllowed = 0
+  if cap.executable then
+    capabilityAllowed = physical
+    if opp.requirements and opp.requirements.cooldown and capabilityAllowed > 1 then
+      capabilityAllowed = 1
+    end
+  end
+
+  local affordableNow = 0
+  local affordableAfterMail = 0
+  if physical > 0 then
+    affordableNow = maxCraftsForCash(opp, owned, deployable, physical)
+    affordableAfterMail = maxCraftsForCash(opp, owned, afterMailDeployable, physical)
+  end
 
   local person = {
     opp = opp,
@@ -126,9 +145,13 @@ function Planner:Personalize(opp, deployable, claimable)
     cap = cap,
     ownedInputs = owned,
     inputCount = inCount,
-    maxProfitableCrafts = maxProfitable,
-    maxAffordableCrafts = 0,
-    maxExecutableCrafts = 0,
+    marketProfitableCrafts = marketProfitable,
+    physicalPossibleCrafts = physical,
+    affordableCrafts = affordableNow,
+    capabilityAllowedCrafts = capabilityAllowed,
+    executableCrafts = 0,
+    -- Output liquidity is not modelled yet, so sensible does not shrink executable.
+    sensibleCrafts = 0,
     cashRequiredNow = 0,
     economicInputValue = 0,
     ownedInputValue = 0,
@@ -136,6 +159,31 @@ function Planner:Personalize(opp, deployable, claimable)
     economicProfit = 0,
     reason = cap.reason,
   }
+
+  local function commit(n)
+    local cash, economic, ownedValue, complete = craftCost(opp, n, owned)
+    if not complete or not cash then
+      return nil
+    end
+    local netPer = tonumber(opp.netRevenue) or 0
+    return n * netPer - economic, cash, economic, ownedValue
+  end
+
+  local function accept(n)
+    local profit, cash, economic, ownedValue = commit(n)
+    if not profit then
+      return false
+    end
+    person.executableCrafts = n
+    person.sensibleCrafts = n
+    person.cashRequiredNow = cash
+    person.economicInputValue = economic
+    person.ownedInputValue = ownedValue
+    person.missingInputCost = cash
+    person.economicProfit = profit
+    person.roi = (cash > 0) and (profit / cash) or (ownedValue > 0 and (profit / ownedValue) or 0)
+    return true
+  end
 
   if opp.oldestDataAge and opp.oldestDataAge > (OnyxiaGold.Config.FullScanStaleSeconds or 3600) then
     person.state = "STALE_DATA"
@@ -160,38 +208,22 @@ function Planner:Personalize(opp, deployable, claimable)
     return person
   end
 
-  if maxProfitable <= 0 then
+  if physical <= 0 then
     person.state = "UNPROFITABLE"
     person.reason = "Not profitable"
     return person
   end
 
-  local affordableNow = maxCraftsForCash(opp, owned, deployable, capMax)
-  local affordableAfterMail = maxCraftsForCash(opp, owned, deployable + claimable, capMax)
-  person.maxAffordableCrafts = affordableNow
-
-  local function applyN(n)
-    local cash, economic, ownedValue, complete = craftCost(opp, n, owned)
-    if not complete or not cash then
-      return false
-    end
-    local netPer = tonumber(opp.netRevenue) or 0
-    local profit = n * netPer - economic
-    person.maxExecutableCrafts = n
-    person.cashRequiredNow = cash
-    person.economicInputValue = economic
-    person.ownedInputValue = ownedValue
-    person.missingInputCost = cash
-    person.economicProfit = profit
-    person.roi = (cash > 0) and (profit / cash) or (ownedValue > 0 and (profit / ownedValue) or 0)
-    return profit
+  local execCap = affordableNow
+  if capabilityAllowed < execCap then
+    execCap = capabilityAllowed
   end
-
-  if affordableNow > 0 then
-    local n = affordableNow
+  if execCap > 0 then
+    local n = execCap
     while n > 0 do
-      local profit = applyN(n)
+      local profit = commit(n)
       if profit and profit > 0 and meetsThreshold(profit) then
+        accept(n)
         person.state = "ACTIONABLE_NOW"
         return person
       end
@@ -199,18 +231,24 @@ function Planner:Personalize(opp, deployable, claimable)
     end
     person.state = "UNPROFITABLE"
     person.reason = "Economic profit <= 0 after opportunity cost"
-    person.maxExecutableCrafts = 0
+    person.executableCrafts = 0
+    person.sensibleCrafts = 0
     return person
   end
 
-  if affordableAfterMail > 0 then
-    local n = affordableAfterMail
+  local afterCap = affordableAfterMail
+  if capabilityAllowed < afterCap then
+    afterCap = capabilityAllowed
+  end
+  if afterCap > 0 then
+    local n = afterCap
     while n > 0 do
-      local profit = applyN(n)
-      person.maxAffordableCrafts = 0
+      local profit = commit(n)
       if profit and profit > 0 and meetsThreshold(profit) then
         person.state = "ACTIONABLE_AFTER_MAIL"
         person.reason = "Collect mail first"
+        person.executableCrafts = 0
+        person.sensibleCrafts = 0
         return person
       end
       n = n - 1
@@ -219,9 +257,8 @@ function Planner:Personalize(opp, deployable, claimable)
 
   person.state = "WAITING_FOR_FUNDS"
   person.reason = "Insufficient liquid gold"
-  local _, _, _, complete = craftCost(opp, 1, owned)
+  local cash, _, _, complete = craftCost(opp, 1, owned)
   if complete then
-    local cash = craftCost(opp, 1, owned)
     person.cashRequiredNow = cash or 0
     person.missingInputCost = person.cashRequiredNow
   end
@@ -245,7 +282,7 @@ end
 
 local function actionFromPerson(person, index)
   local opp = person.opp
-  local crafts = person.maxExecutableCrafts or 0
+  local crafts = person.sensibleCrafts or person.executableCrafts or 0
   local cash = person.cashRequiredNow or 0
   local ownedCrafts = 0
   if person.inputCount and person.inputCount > 0 then
@@ -300,15 +337,30 @@ function Planner:Refresh()
     opps = OnyxiaGold.OpportunityEngine:GetResults() or {}
   end
   local deployable = OnyxiaGold.Capital and OnyxiaGold.Capital:GetSpendableNow() or 0
+  local afterMailSpendable = OnyxiaGold.Capital and OnyxiaGold.Capital:GetSpendableAfterMail() or deployable
   local claimable = OnyxiaGold.Capital and OnyxiaGold.Capital:GetClaimableMail() or 0
   local liquid = OnyxiaGold.Capital and OnyxiaGold.Capital:GetLiquid() or 0
   local reserve = OnyxiaGold.Capital and OnyxiaGold.Capital:GetWorkingCapital() or 0
+
+  -- Gold already assigned in this plan still has to come out of the
+  -- post-collection budget. Do not add claimable on top of remaining deployable.
+  local function afterMailBudget(unspent)
+    local spent = deployable - (tonumber(unspent) or 0)
+    if spent < 0 then
+      spent = 0
+    end
+    local left = afterMailSpendable - spent
+    if left < 0 then
+      left = 0
+    end
+    return left
+  end
 
   local remaining = deployable
   local used = {}
   local people = {}
   for i = 1, table.getn(opps) do
-    people[i] = self:Personalize(opps[i], deployable, claimable)
+    people[i] = self:Personalize(opps[i], deployable, afterMailBudget(deployable))
   end
 
   local guard = 0
@@ -320,7 +372,7 @@ function Planner:Refresh()
       if not used[i] then
         local person = self:Personalize(opps[i], remaining, 0)
         people[i] = person
-        if person.state == "ACTIONABLE_NOW" and (person.maxExecutableCrafts or 0) > 0 then
+        if person.state == "ACTIONABLE_NOW" and (person.sensibleCrafts or 0) > 0 then
           if (person.cashRequiredNow or 0) <= remaining then
             local s = scoreOf(person)
             if not bestScore or s > bestScore then
@@ -350,13 +402,13 @@ function Planner:Refresh()
     table.insert(self.actions, actionFromPerson(person, table.getn(self.actions) + 1))
   end
 
-  local afterMail = 0
+  local unlockedByMail = 0
   for i = 1, table.getn(people) do
     if not used[i] then
-      local person = self:Personalize(opps[i], remaining, claimable)
+      local person = self:Personalize(opps[i], remaining, afterMailBudget(remaining))
       people[i] = person
       if person.state == "ACTIONABLE_AFTER_MAIL" then
-        afterMail = afterMail + 1
+        unlockedByMail = unlockedByMail + 1
       elseif person.state == "WAITING_FOR_FUNDS"
         or person.state == "LOCKED_PROFESSION"
         or person.state == "GLOBAL_ONLY"
@@ -370,7 +422,17 @@ function Planner:Refresh()
     end
   end
 
-  if claimable > 0 and afterMail > 0 then
+  local mailPartial = OnyxiaGold.Mail and OnyxiaGold.Mail.IsSnapshotComplete
+    and OnyxiaGold.Mail:IsSnapshotComplete() == false
+  local function formatReady(amount)
+    local text = OnyxiaGold.FormatGoldShort(amount)
+    if mailPartial then
+      return "~" .. text .. "+"
+    end
+    return text
+  end
+
+  if claimable > 0 and unlockedByMail > 0 then
     table.insert(self.actions, {
       index = table.getn(self.actions) + 1,
       kind = "COLLECT_MAIL",
@@ -381,13 +443,14 @@ function Planner:Refresh()
       crafts = 0,
       state = "ACTIONABLE_NOW",
       detail = string.format(
-        "Ready %s · then ~%s liquid · unlocks %d",
-        OnyxiaGold.FormatGoldShort(claimable),
-        OnyxiaGold.FormatGoldShort(liquid + claimable),
-        afterMail
+        "Ready %s · then %s liquid · unlocks %d",
+        formatReady(claimable),
+        formatReady(liquid + claimable),
+        unlockedByMail
       ),
       claimable = claimable,
-      unlocks = afterMail,
+      mailPartial = mailPartial and true or false,
+      unlocks = unlockedByMail,
     })
   elseif claimable > 0 and table.getn(self.actions) == 0 then
     table.insert(self.actions, {
@@ -399,8 +462,9 @@ function Planner:Refresh()
       cashRequiredNow = 0,
       crafts = 0,
       state = "ACTIONABLE_NOW",
-      detail = "Ready " .. OnyxiaGold.FormatGoldShort(claimable),
+      detail = "Ready " .. formatReady(claimable),
       claimable = claimable,
+      mailPartial = mailPartial and true or false,
     })
   end
 
@@ -408,6 +472,7 @@ function Planner:Refresh()
     liquid = liquid,
     reserve = reserve,
     deployable = deployable,
+    deployableAfterMail = afterMailSpendable,
     remaining = remaining,
     claimable = claimable,
     pending = OnyxiaGold.Capital and OnyxiaGold.Capital:GetPendingAuctionGold() or 0,

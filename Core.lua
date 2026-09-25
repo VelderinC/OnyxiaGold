@@ -5,8 +5,8 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.2"
-OnyxiaGold.DB_VERSION = 3
+OnyxiaGold.Version = "0.1.3"
+OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
 OnyxiaGold.Engines = OnyxiaGold.Engines or {}
@@ -26,7 +26,8 @@ OnyxiaGold.Config = {
   MaxHistoryPoints = 30,
   MaxScanSummaries = 20,
   MaxLogLines = 800,
-  -- Compact buyout book: cheapest levels are kept if a cap is hit.
+  -- Persisted acquisition book only. Percentiles use the full runtime book
+  -- before this cap; depthCoveredQuantity records how much the cap kept.
   MaxDepthLevelsPerItem = 100,
   -- Data older than this is flagged stale (opportunities still calculate).
   QuickScanStaleSeconds = 600,

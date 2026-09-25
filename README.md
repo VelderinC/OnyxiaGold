@@ -6,7 +6,7 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.1** made the market-data layer trustworthy. Version **0.1.2** adds **character state and capital awareness**. Planner polish is **0.1.3**. The first large profession engine is **v0.2.0 Disenchant EV**.
+Version **0.1.1** made the market-data layer trustworthy. Version **0.1.2** adds **character state and capital awareness**. Version **0.1.3** starts Factory Operations with the Phase A planner and snapshot corrections. Session reservation, Factory Mail, and Factory Inventory are still ahead. The first large profession engine is **v0.2.0 Disenchant EV**.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, does not loot mail, and does not use anything outside the WoW client.
 
@@ -29,7 +29,7 @@ Jewelcrafting remains in the generic capability model for GLOBAL market analysis
 4. **Depth-aware acquisition cost** (walks cheapest levels until the requested quantity is filled)
 5. Quantity-weighted P10 / P25 / median / P75 / mean
 6. Essence and shard conversion arbitrage (both directions; item-use, no profession)
-7. Saronite → Titanium transmute EV, gated on Alchemy 440 + known recipe 60350
+7. Saronite → Titanium transmute EV, gated on Alchemy 395 + known recipe 60350
 8. Realm/faction market keys (`Onyxia|Horde`, `Onyxia|Alliance`)
 9. Character snapshots keyed by `Realm|Faction|Name`
 10. Liquid gold, mail ready, pending AH invoices, listed auctions, bag/bank materials
@@ -79,9 +79,10 @@ These are not interchangeable:
 | **Bags** | Market value of tracked materials you are carrying | No (but they cut cash required to craft) |
 | **Bank** | Last-known tracked materials in the bank | No (may require a visit) |
 | **Deployable now** | Liquid minus the working-capital reserve | Yes (planner budget) |
+| **Deployable after mail** | Reserve recalculated on liquid + claimable mail | Only after you collect the mail |
 | **Estimated net** | Sum of the above, informational | Never |
 
-Default reserve is **10%** of liquid gold (`settings.capitalReservePercent`).
+Default reserve is **10%** of the liquid gold the reserve is calculated against (`settings.capitalReservePercent`). After mail collection that base is liquid + claimable mail, not current deployable plus the whole mail balance.
 
 Owned materials have **opportunity cost** (liquidation value) in economic profit, and **zero extra cash** in cash-flow.
 
@@ -100,9 +101,10 @@ All money is **integer copper** (1 gold = 10000 copper).
 - `totalQuantity` — every listed unit, including bid-only
 - `buyoutQuantity` — units with a buyout (instant-buy stock)
 - `GetQuantity()` returns **buyoutQuantity** so acquisition math cannot count bid-only stock
-- `GetAcquisitionCost(id, n)` walks the sorted buyout book. It returns **nil** if buyout stock cannot fill `n`
-- `GetAcquisitionQuote` returns filled quantity, total/avg/marginal cost, and `complete`
-- Median / percentiles are **quantity-weighted** over compact depth levels, not “one vote per auction”
+- `buyoutQuantity` is the full instant-buy count. `depthCoveredQuantity` is how much of that book the persisted depth still represents
+- `GetAcquisitionCost(id, n)` walks the persisted buyout book. It returns **nil** if covered depth cannot fill `n`. It does not price past `depthCoveredQuantity`
+- `GetAcquisitionQuote` returns filled quantity, total/avg/marginal cost, `depthCoveredQuantity`, and `complete`
+- Median / percentiles / weighted mean are **quantity-weighted over the full runtime book**, then the acquisition depth is truncated for storage
 - Opportunity **sell** unit is **P25**, falling back to P10 then minimum on thin books
 - `GetMarketReferencePrice` is the quantity-weighted median
 - `GetLiquidationPrice` is P10 (then P25, then min)
@@ -111,7 +113,7 @@ AH cut is a single config (`0.05`) applied once to expected sale proceeds.
 
 ## Database
 
-SavedVariables version **3**. Layout:
+SavedVariables version **4**. Layout:
 
 ```
 OnyxiaGoldDB.markets["Onyxia|Alliance"] = {
@@ -121,7 +123,7 @@ OnyxiaGoldDB.markets["Onyxia|Alliance"] = {
 }
 
 OnyxiaGoldDB.characters["Onyxia|Alliance|Name"] = {
-  identity, professions, knownRecipes, recipeScans, specialisations,
+  identity, professions, knownRecipes (by profession), recipeScans, specialisations,
   inventory, bank, mail, auctions, capital, stateTimestamps
 }
 ```
@@ -155,7 +157,7 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Item-use; no profession |
 | 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Item-use; no profession |
 | 3 Small Dream Shards ↔ 1 Dream Shard | Item-use; no profession |
-| 8 Saronite Bars → 1 Titanium Bar | Alchemy 440, recipe 60350; Transmute Master is an EV modifier (1.20x), not a craft gate |
+| 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. Transmute Master is an EV modifier (1.20x), not a craft gate |
 
 Market opportunities require first-craft expected profit > 0 after AH cut. The action list then keeps only what this character can execute **now** with current gold, bags, and recipes. Expected sale proceeds are never treated as cash for the next buy.
 
@@ -167,7 +169,10 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - `getAll` is detected and logged but **not** used unless `/og getall` is turned on
 - 3.3.5a has no exact-match AH query; Quick Scan relies on name + item ID filter
 - `seller_temp_invoice` pending mail is implemented, but 3.3.5 MailFrame may not expose it; confirm on Warmane
-- Owner-auction snapshot is the currently shown owner page only (no paging)
+- Owner-auction snapshot does not page. If `shown < total`, Listed is approximate (`complete = false`)
+- If the mailbox has not loaded every message, Mail Ready and Pending are approximate (`snapshotComplete = false`)
+- Known recipes are replaced per profession on a complete tradeskill scan. They are not appended forever
+- `sensibleCrafts` is not yet reduced by output liquidity
 - Bank counts are last-open snapshots
 - Recipe knowledge is only as current as the last tradeskill window scan
 - No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)
@@ -185,7 +190,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 1. `GetMoney` matches the backpack gold display exactly.
 2. Spending gold updates Liquid immediately.
 3. Receiving gold updates Liquid immediately.
-4. Open mailbox with gold attachments; Mail Ready equals total attached money.
+4. Open mailbox with gold attachments. When every message is loaded, Mail Ready equals total attached money. When `visible < total`, the UI shows an approximate figure, not an exact sum.
 5. A pending Auction House invoice is Pending, not Mail Ready.
 6. Pending amount follows `bid + deposit - consignment` and does not increase deployable gold.
 7. After delayed sale funds become attached, they move Pending → Mail Ready without double-counting.
@@ -204,7 +209,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 20. Unscanned recipes are UNKNOWN, not a false “missing recipe”.
 21. A recipe the character does not know does not appear in the main action list.
 22. An opportunity needing 500g with 200g liquid is not actionable now.
-23. The same opportunity becomes “after mail” when 400g is claimable.
+23. The same opportunity becomes “after mail” only when post-collection deployable (reserve on liquid + mail) can fund it. Liquid 100g, reserve 10%, mail 900g is 900g deployable, not 990g.
 24. Pending 400g with 0 claimable does **not** make it actionable.
 25. The 10% planner reserve is respected.
 26. The planner never allocates more current liquid than exists.
@@ -222,7 +227,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 
 ## Future roadmap
 
-1. **0.1.3** — Action planner refinement (session remaining-capital copy, abundance thresholds)
+1. **0.1.3** — Factory Operations. Phase A (this build) corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Still ahead: session reservation, Factory Mail, Factory Inventory.
 2. **v0.2.0** — Full disenchant expected-value engine (weapon vs armour, iLevel, quality; Full Scan feed)
 3. **v0.2.1+** — Enchanting conversions: Abyssal Shatter, Void Shatter (confirmed 3.3.5 data), vellum scrolls
 4. **v0.3+** — Recursive capability-aware transformation graph (GLOBAL paths vs EXECUTABLE paths)

@@ -15,6 +15,11 @@
 
   Depth lives on latest records only as:
     depth = { { p = copper, q = units, n = auctions }, ... } cheapest first
+
+  buyoutQuantity is the full instant-buy count.
+  depthCoveredQuantity is how many of those units the persisted depth still
+  represents after MaxDepthLevelsPerItem truncation.
+  GetAcquisitionQuote will not price past depthCoveredQuantity.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -60,6 +65,63 @@ end
 
 function Prices:GetQuantity(itemID)
   return self:GetBuyoutQuantity(itemID)
+end
+
+function Prices:SumDepthQuantity(depth)
+  local sum = 0
+  if type(depth) ~= "table" then
+    return 0
+  end
+  for i = 1, table.getn(depth) do
+    local lvl = depth[i]
+    local q = lvl and (lvl.q or lvl.quantity)
+    if q and q > 0 then
+      sum = sum + q
+    end
+  end
+  return sum
+end
+
+-- Units the persisted book can actually price. Not the full buyout count.
+function Prices:GetDepthCoveredQuantity(itemID)
+  local rec = record(itemID)
+  if not rec then
+    return 0
+  end
+  if rec.depthCoveredQuantity ~= nil then
+    return tonumber(rec.depthCoveredQuantity) or 0
+  end
+  if type(rec.depth) == "table" then
+    return self:SumDepthQuantity(rec.depth)
+  end
+  return 0
+end
+
+-- Cheapest persisted levels, stopped at depthCoveredQuantity.
+local function depthWithinCoverage(depth, covered)
+  local out = {}
+  local left = tonumber(covered) or 0
+  if type(depth) ~= "table" or left <= 0 then
+    return out
+  end
+  for i = 1, table.getn(depth) do
+    if left <= 0 then
+      break
+    end
+    local lvl = depth[i]
+    local p = lvl and (lvl.p or lvl.unitPrice)
+    local q = lvl and (lvl.q or lvl.quantity)
+    local n = (lvl and (lvl.n or lvl.auctions)) or 1
+    if p and p > 0 and q and q > 0 then
+      local use = q
+      if use > left then
+        use = left
+      end
+      table.insert(out, { p = p, q = use, n = n })
+      left = left - use
+    end
+  end
+  return out
 end
 
 function Prices:GetAuctionCount(itemID)
@@ -194,8 +256,10 @@ function Prices:HasPrice(itemID)
 end
 
 --[[
-  Quantity-weighted percentile over compact depth levels.
-  target = buyoutQuantity * percentile. Walk cumulative q; do not expand units.
+  Quantity-weighted percentile over a depth book.
+  Pass the full runtime book and its full quantity. Do not pass a truncated
+  book together with the uncapped buyout count.
+  target = quantity * percentile. Walk cumulative q; do not expand units.
 
   Example: levels (p=10000,q=20), (p=14000,q=100), (p=18000,q=500)
   buyoutQty=620
@@ -231,6 +295,7 @@ end
 
 function Prices:GetAcquisitionQuote(itemID, quantity)
   quantity = math.floor(tonumber(quantity) or 0)
+  local covered = self:GetDepthCoveredQuantity(itemID)
   local quote = {
     requestedQuantity = quantity,
     filledQuantity = 0,
@@ -239,6 +304,7 @@ function Prices:GetAcquisitionQuote(itemID, quantity)
     marginalUnitCost = nil,
     levelsConsumed = 0,
     complete = false,
+    depthCoveredQuantity = covered,
   }
   if quantity <= 0 then
     quote.complete = true
@@ -247,15 +313,11 @@ function Prices:GetAcquisitionQuote(itemID, quantity)
     return quote
   end
 
-  local depth = self:GetDepth(itemID)
-  if type(depth) ~= "table" or table.getn(depth) == 0 then
-    local min = self:GetMarketMinimum(itemID)
-    local stock = self:GetBuyoutQuantity(itemID)
-    if min and min > 0 and stock > 0 then
-      depth = { { p = min, q = stock, n = 1 } }
-    else
-      return quote
-    end
+  -- Never invent a full-book quote from min * buyoutQuantity.
+  -- Persisted depth may cover only the cheapest slice of the market.
+  local depth = depthWithinCoverage(self:GetDepth(itemID), covered)
+  if table.getn(depth) == 0 then
+    return quote
   end
 
   local need = quantity
@@ -282,11 +344,12 @@ function Prices:GetAcquisitionQuote(itemID, quantity)
   if quote.filledQuantity > 0 then
     quote.averageUnitCost = math.floor(quote.totalCost / quote.filledQuantity)
   end
-  quote.complete = (quote.filledQuantity >= quantity)
+  -- complete only when the requested quantity fits inside covered depth.
+  quote.complete = (quantity <= covered) and (quote.filledQuantity >= quantity)
   if OnyxiaGold.Log and OnyxiaGold.Log.Trace then
     OnyxiaGold.Log:Trace("Prices", string.format(
-      "quote item=%s qty=%d filled=%d cost=%s avg=%s marg=%s levels=%d complete=%s",
-      tostring(itemID), quantity, quote.filledQuantity,
+      "quote item=%s qty=%d filled=%d covered=%d cost=%s avg=%s marg=%s levels=%d complete=%s",
+      tostring(itemID), quantity, quote.filledQuantity, covered,
       tostring(quote.totalCost), tostring(quote.averageUnitCost),
       tostring(quote.marginalUnitCost), quote.levelsConsumed, tostring(quote.complete)
     ))
@@ -314,26 +377,13 @@ function Prices:GetMaxProfitableBatches(itemID, unitsPerBatch, netPerBatch)
     return nil
   end
 
-  local depth = self:GetDepth(itemID)
-  if type(depth) ~= "table" or table.getn(depth) == 0 then
-    local min = self:GetMarketMinimum(itemID)
-    local stock = self:GetBuyoutQuantity(itemID)
-    if not min or min <= 0 or stock < unitsPerBatch then
-      return nil
-    end
-    if min * unitsPerBatch >= netPerBatch then
-      return nil
-    end
-    local n = math.floor(stock / unitsPerBatch)
-    local first = min * unitsPerBatch
-    return {
-      batches = n,
-      firstCost = first,
-      firstProfit = netPerBatch - first,
-      totalCost = first * n,
-      totalProfit = (netPerBatch - first) * n,
-      averageUnitCost = min,
-    }
+  local covered = self:GetDepthCoveredQuantity(itemID)
+  if covered < unitsPerBatch then
+    return nil
+  end
+  local depth = depthWithinCoverage(self:GetDepth(itemID), covered)
+  if table.getn(depth) == 0 then
+    return nil
   end
 
   local leftoverUnits = 0

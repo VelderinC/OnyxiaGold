@@ -360,23 +360,62 @@ function UI:ShowCapitalTooltip(owner)
   GameTooltip:AddLine("Liquid (spendable at AH): " .. OnyxiaGold.FormatMoney(cap.liquid), 1, 1, 1)
   GameTooltip:AddLine("Planner reserve (" .. OnyxiaGold.FormatPercent(cap.reservePercent) .. "): " .. OnyxiaGold.FormatMoney(cap.reserve), 0.8, 0.8, 0.8)
   GameTooltip:AddLine("Deployable now: " .. OnyxiaGold.FormatMoney(cap.deployable), 0.35, 0.85, 0.45)
+  local afterText = OnyxiaGold.FormatMoney(cap.deployableAfterMail or 0)
+  if cap.mailComplete == false then
+    afterText = "~" .. afterText .. "+"
+  end
+  GameTooltip:AddLine("Deployable after mail: " .. afterText, 0.35, 0.85, 0.45)
+  GameTooltip:AddLine(
+    "After-mail reserve (" .. OnyxiaGold.FormatPercent(cap.reservePercent) .. " of liquid + mail): "
+      .. OnyxiaGold.FormatMoney(cap.postMailReserve or 0),
+    0.8, 0.8, 0.8
+  )
   GameTooltip:AddLine(" ", 1, 1, 1)
 
   local mailAge = cap.mailAge
   local mailPrefix = "Mail ready: "
+  local mailAmount = OnyxiaGold.FormatMoney(cap.claimableMail)
   if mailAge == nil then
     mailPrefix = "Mail ready (never checked): "
+  elseif cap.mailComplete == false then
+    mailPrefix = "Mail ready: ~"
+    mailAmount = mailAmount .. "+"
   elseif OnyxiaGold.Mail and OnyxiaGold.Mail:IsStale() then
     mailPrefix = "Mail ready ~ "
   end
-  GameTooltip:AddLine(mailPrefix .. OnyxiaGold.FormatMoney(cap.claimableMail), 1, 1, 1)
-  GameTooltip:AddLine("Pending AH invoices: " .. OnyxiaGold.FormatMoney(cap.pendingAuctionGold), 1, 0.85, 0.35)
+  GameTooltip:AddLine(mailPrefix .. mailAmount, 1, 1, 1)
+  if cap.mailComplete == false then
+    GameTooltip:AddLine(string.format(
+      "%s shown · mailbox not fully loaded (%d/%d)",
+      OnyxiaGold.FormatMoney(cap.claimableMail),
+      cap.mailVisible or 0,
+      cap.mailTotal or 0
+    ), 1, 0.85, 0.35, 1)
+  end
+  local pendingText = OnyxiaGold.FormatMoney(cap.pendingAuctionGold)
+  if cap.mailComplete == false then
+    pendingText = "~" .. pendingText .. "+"
+  end
+  GameTooltip:AddLine("Pending AH invoices: " .. pendingText, 1, 0.85, 0.35)
   if mailAge then
     local r, g, b = OnyxiaGold.FreshnessRGB(mailAge, OnyxiaGold.Config.MailStaleSeconds, 3600)
     GameTooltip:AddLine("Mail checked " .. OnyxiaGold.FormatAge(mailAge) .. " ago", r, g, b)
   end
-  GameTooltip:AddLine("Listed asking: " .. OnyxiaGold.FormatMoney(cap.listedAsking), 0.8, 0.8, 0.8)
-  GameTooltip:AddLine("Listed expected net: " .. OnyxiaGold.FormatMoney(cap.listedExpectedNet), 0.8, 0.8, 0.8)
+  local listedAsking = OnyxiaGold.FormatMoney(cap.listedAsking)
+  local listedNet = OnyxiaGold.FormatMoney(cap.listedExpectedNet)
+  if cap.auctionsComplete == false then
+    listedAsking = "~" .. listedAsking
+    listedNet = "~" .. listedNet
+  end
+  GameTooltip:AddLine("Listed asking: " .. listedAsking, 0.8, 0.8, 0.8)
+  GameTooltip:AddLine("Listed expected net: " .. listedNet, 0.8, 0.8, 0.8)
+  if cap.auctionsComplete == false then
+    GameTooltip:AddLine(string.format(
+      "Listed is approximate: %d of %d auctions shown",
+      cap.auctionsShown or 0,
+      cap.auctionsTotal or 0
+    ), 1, 0.85, 0.35, 1)
+  end
   GameTooltip:AddLine("Current bids on listings: " .. OnyxiaGold.FormatMoney(cap.listedBids), 0.8, 0.8, 0.8)
   if cap.auctionAge then
     local r, g, b = OnyxiaGold.FreshnessRGB(cap.auctionAge, OnyxiaGold.Config.AuctionStaleSeconds, 3600)
@@ -422,10 +461,16 @@ function UI:ShowActionTooltip(row)
     GameTooltip:AddLine("Missing materials cash: " .. OnyxiaGold.FormatMoney(person.missingInputCost or 0), 0.8, 0.8, 0.8)
     GameTooltip:AddLine("Owned units: " .. tostring(person.ownedInputs or 0), 0.75, 0.75, 0.75)
     GameTooltip:AddLine(string.format(
-      "Market cap %s · affordable %s · executable %s",
-      tostring(person.maxProfitableCrafts or 0),
-      tostring(person.maxAffordableCrafts or 0),
-      tostring(person.maxExecutableCrafts or 0)
+      "Market profitable %s · physical %s · affordable %s",
+      tostring(person.marketProfitableCrafts or 0),
+      tostring(person.physicalPossibleCrafts or 0),
+      tostring(person.affordableCrafts or 0)
+    ), 0.75, 0.75, 0.75)
+    GameTooltip:AddLine(string.format(
+      "Capability %s · executable %s · sensible %s",
+      tostring(person.capabilityAllowedCrafts or 0),
+      tostring(person.executableCrafts or 0),
+      tostring(person.sensibleCrafts or 0)
     ), 0.75, 0.75, 0.75)
   end
   if opp then
@@ -485,16 +530,22 @@ function UI:RefreshHeader()
     local mailText = OnyxiaGold.FormatGoldShort(cap.claimableMail)
     if cap.mailAge == nil then
       mailText = "—"
+    elseif cap.mailComplete == false then
+      mailText = "~" .. mailText .. "+"
     elseif OnyxiaGold.Mail and OnyxiaGold.Mail:IsStale() then
       mailText = "~" .. mailText
     end
     local pendingText = OnyxiaGold.FormatGoldShort(cap.pendingAuctionGold)
     if cap.mailAge == nil then
       pendingText = "—"
+    elseif cap.mailComplete == false then
+      pendingText = "~" .. pendingText .. "+"
     end
-    local listedText = "~" .. OnyxiaGold.FormatGoldShort(cap.listedAsking)
+    local listedText = OnyxiaGold.FormatGoldShort(cap.listedAsking)
     if not cap.auctionAge then
       listedText = "—"
+    elseif cap.auctionsComplete == false then
+      listedText = "~" .. listedText
     end
     self.capitalLabel:SetText(string.format(
       "%s Liquid    %s Mail    %s Pending    %s Listed",
@@ -557,7 +608,11 @@ function UI:UpdateList()
       row.cells.name:SetText(label)
       if action.kind == "COLLECT_MAIL" then
         row.cells.profit:SetText("")
-        row.cells.cash:SetText(OnyxiaGold.FormatGoldShort(action.claimable or 0) .. " ready")
+        local ready = OnyxiaGold.FormatGoldShort(action.claimable or 0)
+        if action.mailPartial then
+          ready = "~" .. ready .. "+"
+        end
+        row.cells.cash:SetText(ready .. " ready")
         row.cells.crafts:SetText("")
       else
         row.cells.profit:SetText(OnyxiaGold.FormatMoneySigned(action.expectedProfit or 0))

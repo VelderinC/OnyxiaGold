@@ -539,7 +539,8 @@ function Scanner:FinishQuickItem()
   end
 end
 
-function Scanner:CompactDepth(levelMap)
+-- Full runtime book, cheapest first. Not yet truncated.
+function Scanner:SortedDepth(levelMap)
   local list = {}
   if type(levelMap) ~= "table" then
     return list
@@ -554,34 +555,79 @@ function Scanner:CompactDepth(levelMap)
   table.sort(list, function(a, b)
     return a.p < b.p
   end)
-  local cap = OnyxiaGold.Config.MaxDepthLevelsPerItem or 100
-  while table.getn(list) > cap do
-    table.remove(list)
-  end
   return list
 end
 
+-- Keep only the cheapest persisted acquisition levels.
+function Scanner:TruncateDepth(list)
+  local cap = OnyxiaGold.Config.MaxDepthLevelsPerItem or 100
+  local n = table.getn(list)
+  local keep = n
+  if keep > cap then
+    keep = cap
+  end
+  local out = {}
+  local covered = 0
+  for i = 1, keep do
+    out[i] = list[i]
+    covered = covered + (list[i].q or 0)
+  end
+  return out, covered
+end
+
 function Scanner:FinalizeItem(rec)
-  rec.depth = self:CompactDepth(rec.buyoutLevels)
+  -- Statistics come from the complete runtime book. Truncation is persistence only.
+  local full = self:SortedDepth(rec.buyoutLevels)
   rec.buyoutLevels = nil
-  local nLevels = table.getn(rec.depth)
-  if rec.buyoutQuantity and rec.buyoutQuantity > 0 then
-    rec.meanUnitBuyout = math.floor((rec.buyoutCopperSum or 0) / rec.buyoutQuantity)
-    rec.p10UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(rec.depth, rec.buyoutQuantity, 0.10)
-    rec.p25UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(rec.depth, rec.buyoutQuantity, 0.25)
-    rec.medianUnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(rec.depth, rec.buyoutQuantity, 0.50)
-    rec.p75UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(rec.depth, rec.buyoutQuantity, 0.75)
+  local fullQty = 0
+  local copper = 0
+  local nFull = table.getn(full)
+  for i = 1, nFull do
+    local q = full[i].q or 0
+    local p = full[i].p or 0
+    fullQty = fullQty + q
+    copper = copper + (p * q)
+  end
+  if nFull > 0 then
+    rec.minUnitBuyout = full[1].p
+  end
+  if fullQty > 0 then
+    rec.meanUnitBuyout = math.floor(copper / fullQty)
+    rec.p10UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(full, fullQty, 0.10)
+    rec.p25UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(full, fullQty, 0.25)
+    rec.medianUnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(full, fullQty, 0.50)
+    rec.p75UnitBuyout = OnyxiaGold.Prices.PercentileFromDepth(full, fullQty, 0.75)
   else
     rec.meanUnitBuyout = rec.minUnitBuyout
+    rec.p10UnitBuyout = nil
+    rec.p25UnitBuyout = nil
+    rec.medianUnitBuyout = nil
+    rec.p75UnitBuyout = nil
+  end
+  local persisted, covered = self:TruncateDepth(full)
+  rec.depth = persisted
+  rec.depthCoveredQuantity = covered
+  -- buyoutQuantity stays the full instant-buy count from the scan.
+  local nLevels = table.getn(rec.depth)
+  if (rec.buyoutQuantity or 0) > covered then
+    OnyxiaGold.Log:Debug("Scanner", string.format(
+      "%s depth truncated levels=%d covered=%d buyout=%d",
+      tostring(rec.name), nLevels, covered, rec.buyoutQuantity or 0
+    ))
   end
   if self.mode == "quick" then
     OnyxiaGold.Log:Debug("Scanner", string.format(
-      "%s depthLevels=%d min=%s p25=%s med=%s",
+      "%s depthLevels=%d covered=%d buyout=%d min=%s p10=%s p25=%s med=%s p75=%s mean=%s",
       tostring(rec.name),
       nLevels,
+      covered,
+      rec.buyoutQuantity or 0,
       tostring(rec.minUnitBuyout),
+      tostring(rec.p10UnitBuyout),
       tostring(rec.p25UnitBuyout),
-      tostring(rec.medianUnitBuyout)
+      tostring(rec.medianUnitBuyout),
+      tostring(rec.p75UnitBuyout),
+      tostring(rec.meanUnitBuyout)
     ))
   end
 end

@@ -236,7 +236,7 @@ function Log:LogWatchedPrices()
       local rec = OnyxiaGold.Prices:GetRecord(def.id)
       if rec then
         self:Debug("Prices", string.format(
-          "%s id=%d min=%s p25=%s med=%s totalQty=%s buyoutQty=%s bidOnlyQty=%s auctions=%s buyoutAuctions=%s depth=%s",
+          "%s id=%d min=%s p25=%s med=%s totalQty=%s buyoutQty=%s covered=%s bidOnlyQty=%s auctions=%s buyoutAuctions=%s depth=%s",
           def.name,
           def.id,
           tostring(rec.minUnitBuyout),
@@ -244,6 +244,7 @@ function Log:LogWatchedPrices()
           tostring(rec.medianUnitBuyout),
           tostring(rec.totalQuantity or rec.quantity),
           tostring(rec.buyoutQuantity),
+          tostring(rec.depthCoveredQuantity),
           tostring(rec.bidOnlyQuantity),
           tostring(rec.auctionCount),
           tostring(rec.buyoutAuctionCount),

@@ -4,7 +4,10 @@
 
   DB_VERSION 2 partitions latest/history/scans by market key "Realm|Faction".
   DB_VERSION 3 adds characters["Realm|Faction|Name"] observation snapshots.
+  DB_VERSION 4 scopes knownRecipes by profession and replaces each set on scan.
   Depth lives only on current latest records. History stores compact stats.
+  Latest records keep buyoutQuantity (full book) and depthCoveredQuantity
+  (units still represented after acquisition-depth truncation).
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -140,6 +143,7 @@ function DB:EmptyCharacter()
   return {
     identity = {},
     professions = {},
+    -- knownRecipes[profession][spellID] = true. _legacy holds unscoped pre-v4 spells.
     knownRecipes = {},
     recipeScans = {},
     specialisations = {},
@@ -150,6 +154,9 @@ function DB:EmptyCharacter()
       pendingGold = 0,
       snapshotTimestamp = nil,
       mailboxLastOpened = nil,
+      snapshotComplete = nil,
+      visibleCount = nil,
+      totalCount = nil,
     },
     auctions = {
       listings = {},
@@ -157,6 +164,9 @@ function DB:EmptyCharacter()
       expectedNet = 0,
       currentBids = 0,
       timestamp = nil,
+      shown = nil,
+      total = nil,
+      complete = nil,
     },
     capital = {
       liquid = 0,
@@ -175,6 +185,7 @@ function DB:EnsureCharacterShape(rec)
   rec.professions = type(rec.professions) == "table" and rec.professions or {}
   rec.knownRecipes = type(rec.knownRecipes) == "table" and rec.knownRecipes or {}
   rec.recipeScans = type(rec.recipeScans) == "table" and rec.recipeScans or {}
+  self:MigrateKnownRecipes(rec)
   rec.specialisations = type(rec.specialisations) == "table" and rec.specialisations or {}
   rec.inventory = type(rec.inventory) == "table" and rec.inventory or empty.inventory
   if type(rec.inventory.bags) ~= "table" then
@@ -237,6 +248,122 @@ local function snapshotLegacy(db)
   }
 end
 
+local function numericKey(k)
+  if type(k) == "number" then
+    return k
+  end
+  if type(k) == "string" then
+    return tonumber(k)
+  end
+  return nil
+end
+
+-- spellID -> profession, from static recipe definitions loaded with the addon.
+function DB:SpellProfessionMap()
+  local map = {}
+  local transmutes = OnyxiaGold.Data and OnyxiaGold.Data.Transmutes
+  if type(transmutes) == "table" then
+    for i = 1, table.getn(transmutes) do
+      local def = transmutes[i]
+      local req = def and def.requirements
+      local spell = req and tonumber(req.recipeSpellID)
+      local profession = req and req.profession
+      if spell and profession then
+        map[spell] = profession
+      end
+    end
+  end
+  return map
+end
+
+--[[
+  Old shape: knownRecipes[spellID] = true  (one flat set, appended forever)
+  New shape: knownRecipes[profession][spellID] = true
+  Unscoped leftovers sit in knownRecipes._legacy until that profession is
+  replaced by a complete scan. Idempotent once the flat keys are gone.
+]]
+function DB:MigrateKnownRecipes(rec)
+  if type(rec) ~= "table" then
+    return
+  end
+  if type(rec.knownRecipes) ~= "table" then
+    rec.knownRecipes = {}
+    return
+  end
+  local known = rec.knownRecipes
+  local flat = {}
+  local nested = {}
+  local legacy = {}
+  local sawFlat = false
+  for k, v in pairs(known) do
+    local spell = numericKey(k)
+    if spell and type(v) ~= "table" then
+      sawFlat = true
+      if v then
+        flat[spell] = true
+      end
+    elseif k == "_legacy" and type(v) == "table" then
+      for lk, lv in pairs(v) do
+        local ls = numericKey(lk)
+        if ls and lv and type(lv) ~= "table" then
+          legacy[ls] = true
+        end
+      end
+    elseif type(k) == "string" and type(v) == "table" then
+      nested[k] = v
+    end
+  end
+  if not sawFlat then
+    return
+  end
+
+  local map = self:SpellProfessionMap()
+  local scans = type(rec.recipeScans) == "table" and rec.recipeScans or {}
+  local scanNames = {}
+  for name, scan in pairs(scans) do
+    if type(name) == "string" and type(scan) == "table" and scan.timestamp then
+      table.insert(scanNames, name)
+    end
+  end
+
+  local function bucket(profession)
+    if type(nested[profession]) ~= "table" then
+      nested[profession] = {}
+    end
+    return nested[profession]
+  end
+
+  if table.getn(scanNames) == 1 then
+    local only = scanNames[1]
+    for spell, _ in pairs(flat) do
+      local mapped = map[spell]
+      if mapped then
+        bucket(mapped)[spell] = true
+      else
+        bucket(only)[spell] = true
+      end
+    end
+  else
+    for spell, _ in pairs(flat) do
+      local mapped = map[spell]
+      if mapped then
+        bucket(mapped)[spell] = true
+      else
+        legacy[spell] = true
+      end
+    end
+  end
+
+  local out = {}
+  for profession, set in pairs(nested) do
+    out[profession] = set
+  end
+  if next(legacy) then
+    out._legacy = legacy
+  end
+  rec.knownRecipes = out
+end
+
 local migrations = {
   [2] = function(db)
     -- Preserve unpartitioned v1 tables until PLAYER_LOGIN can name the market.
@@ -254,6 +381,17 @@ local migrations = {
   [3] = function(db)
     db.characters = db.characters or {}
     OnyxiaGold:Debug("v3 character snapshots enabled", "Database")
+  end,
+  [4] = function(db)
+    db.characters = db.characters or {}
+    local n = 0
+    for _, rec in pairs(db.characters) do
+      if type(rec) == "table" then
+        DB:MigrateKnownRecipes(rec)
+        n = n + 1
+      end
+    end
+    OnyxiaGold:Debug("v4 profession-scoped recipe snapshots on " .. tostring(n) .. " characters", "Database")
   end,
 }
 
@@ -374,6 +512,7 @@ local function compactRecord(itemID, rec, timestamp)
     buyoutAuctionCount = rec.buyoutAuctionCount or 0,
     minUnitBuyout = rec.minUnitBuyout,
     minStackBuyout = rec.minStackBuyout,
+    depthCoveredQuantity = rec.depthCoveredQuantity,
     p10UnitBuyout = rec.p10UnitBuyout,
     p25UnitBuyout = rec.p25UnitBuyout,
     medianUnitBuyout = rec.medianUnitBuyout,

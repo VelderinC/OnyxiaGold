@@ -75,6 +75,7 @@ function Owned:Scan()
     end
   end
 
+  local complete = numBatch >= total
   row.auctions.listings = listings
   row.auctions.askingValue = asking
   row.auctions.expectedNet = expectedNet
@@ -82,7 +83,44 @@ function Owned:Scan()
   row.auctions.timestamp = time()
   row.auctions.shown = numBatch
   row.auctions.total = total
+  row.auctions.complete = complete
   row.stateTimestamps.auctions = time()
+  if not complete then
+    OnyxiaGold.Log:Debug("Auctions", string.format(
+      "Owner snapshot incomplete shown=%d total=%d; listed value is approximate",
+      numBatch, total
+    ))
+  end
+end
+
+function Owned:IsSnapshotComplete()
+  local row = rec()
+  if not row or not row.auctions or not row.auctions.timestamp then
+    return nil
+  end
+  if row.auctions.complete ~= nil then
+    return row.auctions.complete and true or false
+  end
+  if row.auctions.shown ~= nil and row.auctions.total ~= nil then
+    return row.auctions.shown >= row.auctions.total
+  end
+  return nil
+end
+
+function Owned:GetShownCount()
+  local row = rec()
+  if not row or not row.auctions or row.auctions.shown == nil then
+    return nil
+  end
+  return tonumber(row.auctions.shown) or 0
+end
+
+function Owned:GetTotalCount()
+  local row = rec()
+  if not row or not row.auctions or row.auctions.total == nil then
+    return nil
+  end
+  return tonumber(row.auctions.total) or 0
 end
 
 function Owned:OnClosed()

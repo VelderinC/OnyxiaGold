@@ -213,6 +213,7 @@ function State:OnEvent(event, arg1)
     if OnyxiaGold.OwnedAuctions then
       OnyxiaGold.OwnedAuctions:Scan()
     end
+    refreshPlannerSoon()
   elseif event == "AUCTION_OWNED_LIST_UPDATE" then
     if OnyxiaGold.OwnedAuctions then
       OnyxiaGold.OwnedAuctions:Scan()
@@ -222,6 +223,7 @@ function State:OnEvent(event, arg1)
     if OnyxiaGold.OwnedAuctions then
       OnyxiaGold.OwnedAuctions:OnClosed()
     end
+    refreshPlannerSoon()
   elseif event == "BANKFRAME_OPENED" then
     if OnyxiaGold.Inventory then
       OnyxiaGold.Inventory:ScanBank()

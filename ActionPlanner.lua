@@ -9,8 +9,11 @@
   The visible list is one session. It can hold more than one craft when they
   do not need the same gold, the same bag slots, the same auction lots, or
   the same cooldown. Each craft is buy the whole lots, then craft, then post.
-  The top line is the single next step. Expected session profit is the sum.
+  The top line is the single next step. When that step cannot be done from
+  here, the line names the errand first and the buy, craft, or post stays
+  underneath. Expected session profit is the sum.
   Owned bag materials reduce cashRequiredNow but keep economic opportunity cost.
+  Bank stock and purchase mail are not bag stock. They do not spend bag gold.
   Post-mail deployable comes from Capital:GetSpendableAfterMail(), which
   reserves against liquid + claimable mail.
 
@@ -68,6 +71,28 @@ local function bagCount(itemID)
   end
   if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
     return OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID) or 0
+  end
+  return 0
+end
+
+local function bankCount(itemID)
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() and session.GetBankCount then
+    return session:GetBankCount(itemID) or 0
+  end
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetBankCount then
+    return OnyxiaGold.Inventory:GetBankCount(itemID) or 0
+  end
+  return 0
+end
+
+local function mailCount(itemID)
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() and session.GetMailCount then
+    return session:GetMailCount(itemID) or 0
+  end
+  if OnyxiaGold.Mail and OnyxiaGold.Mail.GetPurchaseCount then
+    return OnyxiaGold.Mail:GetPurchaseCount(itemID) or 0
   end
   return 0
 end
@@ -263,7 +288,23 @@ local function planInputs(opp, crafts)
     if owned < 0 then
       owned = 0
     end
-    local toBuy = needed - owned
+    local remain = needed - owned
+    local banked = bankCount(itemID)
+    if banked > remain then
+      banked = remain
+    end
+    if banked < 0 then
+      banked = 0
+    end
+    remain = remain - banked
+    local mailed = mailCount(itemID)
+    if mailed > remain then
+      mailed = remain
+    end
+    if mailed < 0 then
+      mailed = 0
+    end
+    local toBuy = remain - mailed
     local buyCost = 0
     local economicBuy = 0
     local leftover = 0
@@ -295,11 +336,13 @@ local function planInputs(opp, crafts)
     else
       unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
     end
-    ownedValue = ownedValue + owned * unit
+    ownedValue = ownedValue + (owned + banked + mailed) * unit
     table.insert(lines, {
       itemID = itemID,
       count = count,
       ownedUnits = owned,
+      bankUnits = banked,
+      mailUnits = mailed,
       buyUnits = toBuy,
       buyCost = buyCost,
       economicCost = economicBuy,
@@ -588,6 +631,7 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
       count = 1
     end
     local have = id and (bagCount(id) or 0) or 0
+    have = have + (id and bankCount(id) or 0) + (id and mailCount(id) or 0)
     if not (opp and opp.ownedOnly) then
       have = have + (id and coveredBuyout(id) or 0)
     end
@@ -757,7 +801,12 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     return person
   end
 
-  local toolState, toolReason = toolDecision(opp)
+  local toolState, toolReason, toolName = toolDecision(opp)
+  -- A stone in the bank is a withdraw, then the craft. It is not a missing tool.
+  if toolState == "WITHDRAW_TOOL" then
+    person.bankTool = { name = toolName or "transmutation stone", count = 1 }
+    toolState = nil
+  end
   -- A missing Alchemy or Enchanting profession is still priced for preview.
   -- The normal list (both flags off) still stops on the tool.
   if toolState and not relaxedMissingProfession then
@@ -1655,11 +1704,28 @@ local function actionFromStep(step, parent, first)
       row.sortName = step.name
       row.detail = step.windowHint or "Post the lot you just bought."
     end
+  elseif step.role == "withdraw" then
+    row.kind = "WITHDRAW"
+    row.typeLabel = "Bank"
+    row.cashRequiredNow = 0
+    row.crafts = 0
+    row.detail = "Withdraw this from the bank. It is not in the bags."
+  elseif step.role == "mail" then
+    row.kind = "MAIL"
+    row.typeLabel = "Mail"
+    row.cashRequiredNow = 0
+    row.crafts = 0
+    if step.mail == "gold" then
+      row.detail = "Take gold is one click. Personal mail and cash-on-delivery stay put."
+    else
+      row.detail = "Take mail is one click. Personal mail and cash-on-delivery stay put."
+    end
   else
     row.kind = "CRAFT"
     row.typeLabel = step.profession or parent.typeLabel or "Craft"
     row.cashRequiredNow = 0
   end
+  row.windowHint = step.windowHint
   return row
 end
 
@@ -1689,6 +1755,8 @@ local function namesFor(action)
   return names
 end
 
+local claimedTools = {}
+
 local function groupFor(action, index)
   local names = namesFor(action)
   local steps = {}
@@ -1702,6 +1770,17 @@ local function groupFor(action, index)
       step.source = action
       table.insert(kept, step)
     end
+  end
+  local tool = action.person and action.person.bankTool
+  if tool and type(tool.name) == "string" and tool.name ~= "" and not claimedTools[tool.name] then
+    claimedTools[tool.name] = true
+    table.insert(kept, {
+      role = "withdraw",
+      count = tonumber(tool.count) or 1,
+      name = tool.name,
+      source = action,
+      stone = true,
+    })
   end
   local buys = {}
   local uses = {}
@@ -1857,6 +1936,9 @@ end
 -- post. A flip is buy, then post. A later sale is not cash. Previews stay
 -- after the session.
 function Planner:OrderSession(deployable)
+  for key in pairs(claimedTools) do
+    claimedTools[key] = nil
+  end
   local Plan = OnyxiaGold.SessionPlan
   if not Plan or not Plan.Present or not Plan.StepsFromAction then
     return nil
@@ -1893,15 +1975,16 @@ function Planner:OrderSession(deployable)
     if not houseOpen then
       local name = post.name or ""
       if not string.find(name, "Open the Auction House.", 1, true) then
-        post.name = name .. " Open the Auction House."
+        post.name = "Open the Auction House. " .. name
       end
+      post.windowHint = "Open the Auction House."
     end
     local count = tonumber(post.postCount) or tonumber(post.stackSize) or tonumber(post.crafts) or 0
     local itemName = post.sortName or "item"
     local profit = tonumber(post.expectedProfit) or 0
     local nextLine = Plan.NextLine({ role = "post", count = count, name = itemName }, profit)
     if nextLine and not houseOpen then
-      nextLine = nextLine .. " Open the Auction House."
+      nextLine = "Open the Auction House. " .. nextLine
     end
     local summary = "Capital deployed 0c. 1 step."
     return {
@@ -2330,6 +2413,19 @@ function Planner:Refresh()
   end
 
   local sessionView = self:OrderSession(deployable)
+  if not sessionView or not sessionView.nextLine or sessionView.nextLine == "" then
+    local sale = 0
+    if OnyxiaGold.Mail and OnyxiaGold.Mail.GetSaleGold then
+      sale = OnyxiaGold.Mail:GetSaleGold() or 0
+    end
+    if sale > 0 and unlockedByMail > 0 then
+      sessionView = sessionView or {}
+      sessionView.nextLine = "Open the mailbox. Take gold."
+      if not sessionView.summaryLine then
+        sessionView.summaryLine = "Capital deployed 0c. 1 step."
+      end
+    end
+  end
 
   for i = 1, table.getn(self.actions) do
     self.actions[i].index = i

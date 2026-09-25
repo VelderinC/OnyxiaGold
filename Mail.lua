@@ -281,6 +281,84 @@ function Mail:GetClaimableGold()
   return m and (tonumber(m.claimableGold) or 0) or 0
 end
 
+-- Sale payments only. Personal mail and cash-on-delivery are not gold to take.
+function Mail:GetSaleGold()
+  local m = mailRow()
+  local list = m and m.messages
+  if type(list) ~= "table" then
+    return 0
+  end
+  local total = 0
+  for i = 1, table.getn(list) do
+    local message = list[i]
+    if message and message.class == "AH_SALE_GOLD" and (tonumber(message.cod) or 0) == 0 then
+      total = total + (tonumber(message.money) or 0)
+    end
+  end
+  return total
+end
+
+local function purchaseClass(message)
+  if not message then
+    return false
+  end
+  if (tonumber(message.cod) or 0) > 0 then
+    return false
+  end
+  if message.safety ~= "SAFE_AUTO_PROCESS" then
+    return false
+  end
+  return message.class == "AH_PURCHASE_ITEM" or message.class == "AH_WON_ITEM"
+end
+
+-- Purchased and won auction items. Personal mail and cash-on-delivery stay out.
+function Mail:GetPurchaseCount(itemID)
+  itemID = tonumber(itemID)
+  local m = mailRow()
+  local list = m and m.messages
+  if not itemID or type(list) ~= "table" then
+    return 0
+  end
+  local total = 0
+  for i = 1, table.getn(list) do
+    local message = list[i]
+    if purchaseClass(message) then
+      local attached = message.items or {}
+      for j = 1, table.getn(attached) do
+        local row = attached[j]
+        if row and tonumber(row.itemID) == itemID then
+          total = total + (tonumber(row.count) or 0)
+        end
+      end
+    end
+  end
+  return total
+end
+
+function Mail:PurchaseItems()
+  local map = {}
+  local m = mailRow()
+  local list = m and m.messages
+  if type(list) ~= "table" then
+    return map
+  end
+  for i = 1, table.getn(list) do
+    local message = list[i]
+    if purchaseClass(message) then
+      local attached = message.items or {}
+      for j = 1, table.getn(attached) do
+        local row = attached[j]
+        local id = row and tonumber(row.itemID)
+        local n = row and tonumber(row.count) or 0
+        if id and n > 0 then
+          map[id] = (map[id] or 0) + n
+        end
+      end
+    end
+  end
+  return map
+end
+
 function Mail:GetPendingGold()
   local m = mailRow()
   return m and (tonumber(m.pendingGold) or 0) or 0

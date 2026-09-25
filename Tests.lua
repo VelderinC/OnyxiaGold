@@ -481,8 +481,8 @@ function Tests:Run()
     and string.find(closed.steps[1].line, "Open the Auction House.", 1, true)
     and string.find(closed.steps[2].line, "Open Alchemy.", 1, true)
     and string.find(closed.steps[3].line, "Open the Auction House.", 1, true)
-    and string.find(closed.nextLine or "", "Buy 20 Saronite Bar", 1, true)
-    and string.find(closed.nextLine or "", "Open the Auction House.", 1, true)
+    and string.find(closed.nextLine or "", "Open the Auction House. Buy 20 Saronite Bar. Maximum spend 20g.", 1, true)
+    and string.find(closed.nextLine or "", "Expected session profit +31g.", 1, true)
     and closed.spent == 200000
     and closed.purse == 300000)
 
@@ -887,6 +887,165 @@ function Tests:Run()
     and nitems(reservedLot.crafts) == 1
     and reservedBuys == 1
     and reservedLot.spent == 100000)
+
+  local enchantClosed = Plan.Present({
+    cash = 0,
+    profit = 10000,
+    professionOpen = false,
+    steps = {
+      { role = "craft", name = "Scroll", count = 1, profession = "Enchanting" },
+    },
+  })
+  check("a closed profession window is named before the craft",
+    enchantClosed
+    and string.find(enchantClosed.nextLine or "", "Open Enchanting. Craft 1 Scroll.", 1, true) == 1
+    and enchantClosed.steps[1].role == "craft")
+
+  -- The reagent is only in the bank. Bag gold could buy the listing, and
+  -- that later sale is not cash. The withdraw is the next step. The craft
+  -- stays underneath it. Bag gold is not spent.
+  local bankCraft = {
+    name = "Elixir",
+    output = "Elixir",
+    profit = 80000,
+    net = 80000,
+    crafts = 1,
+    profession = "Alchemy",
+    reagents = { { itemID = 11, count = 5, name = "Dreamfoil" } },
+  }
+  local bankDepth = {
+    [11] = { levels = { { p = 10000, q = 5, n = 1, s = 5 } }, covered = 5 },
+  }
+  local banked = Plan.Portfolio({ bankCraft }, {
+    cash = 200000,
+    bank = { [11] = 5 },
+    auctionOpen = false,
+    professionOpen = false,
+    depth = bankDepth,
+  })
+  local bankSteps = banked and banked.steps or {}
+  local bankRoles = {}
+  local bankBuy = false
+  for i = 1, nitems(bankSteps) do
+    table.insert(bankRoles, bankSteps[i].role or "")
+    if bankSteps[i].role == "buy" then
+      bankBuy = true
+    end
+  end
+  local bankLine = banked and banked.nextLine or ""
+  check("a bank reagent is withdrawn before the craft and bag gold is not spent",
+    banked
+    and not bankBuy
+    and banked.spent == 0
+    and banked.purse == 200000
+    and banked.profit == 80000
+    and table.concat(bankRoles, ",") == "withdraw,craft,post"
+    and bankSteps[1].name == "Dreamfoil"
+    and bankSteps[1].count == 5
+    and bankSteps[2].role == "craft"
+    and string.find(bankLine, "Withdraw 5 Dreamfoil.", 1, true) == 1
+    and string.find(bankLine, "Expected session profit +8g.", 1, true)
+    and not string.find(bankLine, "Buy", 1, true)
+    and not string.find(bankLine, "Open Alchemy", 1, true)
+    and string.find(bankSteps[2].line or "", "Open Alchemy. Craft 1 Elixir.", 1, true)
+    and Session:GetBagCount(11) == 0
+    and Session:GetBankCount(11) == 0)
+
+  local stoneCraft = Plan.Portfolio({
+    {
+      name = "Elixir",
+      output = "Elixir",
+      profit = 80000,
+      net = 80000,
+      crafts = 1,
+      profession = "Alchemy",
+      stone = { itemID = 13503, name = "Alchemist's Stone" },
+      reagents = { { itemID = 11, count = 5, name = "Dreamfoil" } },
+    },
+  }, {
+    cash = 200000,
+    bags = { [11] = 5 },
+    bank = { [13503] = 1 },
+    depth = bankDepth,
+  })
+  local stoneLine = stoneCraft and stoneCraft.nextLine or ""
+  check("a transmutation stone in the bank is withdrawn before the craft",
+    stoneCraft
+    and stoneCraft.spent == 0
+    and stoneCraft.purse == 200000
+    and stoneCraft.steps[1].role == "withdraw"
+    and stoneCraft.steps[1].name == "Alchemist's Stone"
+    and stoneCraft.steps[2].role == "craft"
+    and string.find(stoneLine, "Withdraw Alchemist's Stone.", 1, true) == 1
+    and Session:GetBankCount(13503) == 0
+    and Session:GetBagCount(13503) == 0)
+
+  local mailed = Plan.Portfolio({ bankCraft }, {
+    cash = 200000,
+    mailItems = { [11] = 5 },
+    auctionOpen = false,
+    professionOpen = false,
+    depth = bankDepth,
+  })
+  local mailedLine = mailed and mailed.nextLine or ""
+  local mailedBuy = false
+  local mailedSteps = mailed and mailed.steps or {}
+  for i = 1, nitems(mailedSteps) do
+    if mailedSteps[i].role == "buy" then
+      mailedBuy = true
+    end
+  end
+  check("a purchased item in the mail is taken before the craft",
+    mailed
+    and not mailedBuy
+    and mailed.spent == 0
+    and mailed.purse == 200000
+    and mailedSteps[1].role == "mail"
+    and mailedSteps[2].role == "craft"
+    and string.find(mailedLine, "Open the mailbox. Take mail.", 1, true) == 1
+    and not string.find(mailedLine, "Open the Auction House.", 1, true)
+    and Session:GetBagCount(11) == 0
+    and Session:GetMailCount(11) == 0)
+
+  local fromMail = Plan.Portfolio({ bankCraft }, {
+    cash = 0,
+    mailGold = 200000,
+    auctionOpen = false,
+    depth = bankDepth,
+  })
+  local fromMailLine = fromMail and fromMail.nextLine or ""
+  local fromMailSteps = fromMail and fromMail.steps or {}
+  check("sale gold in the mail is named before the buy and a later sale is not cash",
+    fromMail
+    and fromMail.spent == 50000
+    and fromMail.purse == 150000
+    and fromMailSteps[1].role == "mail"
+    and fromMailSteps[1].mail == "gold"
+    and fromMailSteps[2].role == "buy"
+    and fromMailSteps[2].cash == 50000
+    and string.find(fromMailLine, "Open the mailbox. Take gold.", 1, true) == 1
+    and not string.find(fromMailLine, "Open the Auction House.", 1, true)
+    and string.find(fromMailSteps[2].line or "", "Open the Auction House.", 1, true)
+    and string.find(fromMailSteps[2].line or "", "Buy 5 Dreamfoil.", 1, true))
+
+  local personal = Plan.Portfolio({ bankCraft }, {
+    cash = 200000,
+    personal = { [11] = 5 },
+    cod = { [11] = 5 },
+    depth = bankDepth,
+  })
+  local personalSteps = personal and personal.steps or {}
+  local personalMail = false
+  for i = 1, nitems(personalSteps) do
+    if personalSteps[i].role == "mail" or personalSteps[i].role == "withdraw" then
+      personalMail = true
+    end
+  end
+  check("personal mail and cash-on-delivery are not taken for the craft",
+    personal
+    and personal.spent == 50000
+    and personalSteps[1].role == "buy"
+    and not personalMail)
 
   local passed = nitems(lines) - failed
   local head

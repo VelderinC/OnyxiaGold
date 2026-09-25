@@ -8,6 +8,10 @@
 
   Each craft stays in its own order: buy the whole lots, then craft, then
   post. A later sale is not added to the purse, so it cannot pay for a buy.
+  When the next step cannot be done from here, the top line names that
+  errand first: the Auction House, the mailbox, a bank withdraw, or the
+  profession window. The buy, craft, or post stays underneath it. Bank
+  stock and purchase mail are not bag stock, and they do not spend bag gold.
   This file does not choose auction lots. Quotes go through SessionState,
   which calls Lots.Select.
 ]]
@@ -68,12 +72,16 @@ function Plan.Signed(copper)
 end
 
 local function orderWithin(steps)
-  local buy, craft, post = {}, {}, {}
+  local buy, mail, withdraw, craft, post = {}, {}, {}, {}, {}
   for i = 1, nitems(steps) do
     local step = steps[i]
     local role = step and step.role
     if role == "buy" then
       table.insert(buy, step)
+    elseif role == "mail" then
+      table.insert(mail, step)
+    elseif role == "withdraw" then
+      table.insert(withdraw, step)
     elseif role == "post" then
       table.insert(post, step)
     elseif role == "craft" then
@@ -81,15 +89,16 @@ local function orderWithin(steps)
     end
   end
   local ordered = {}
-  for i = 1, nitems(buy) do
-    table.insert(ordered, buy[i])
+  local function append(list)
+    for i = 1, nitems(list) do
+      table.insert(ordered, list[i])
+    end
   end
-  for i = 1, nitems(craft) do
-    table.insert(ordered, craft[i])
-  end
-  for i = 1, nitems(post) do
-    table.insert(ordered, post[i])
-  end
+  append(buy)
+  append(mail)
+  append(withdraw)
+  append(craft)
+  append(post)
   return ordered
 end
 
@@ -138,6 +147,15 @@ function Plan.Compose(spec)
   local spent = 0
   local funded = {}
   local blocked = false
+  local bagLeft = tonumber(spec.bagCash)
+  local mailGold = tonumber(spec.mailGold) or 0
+  if mailGold < 0 then
+    mailGold = 0
+  end
+  if bagLeft ~= nil and bagLeft < 0 then
+    bagLeft = 0
+  end
+  local mailNoted = false
   for i = 1, nitems(ordered) do
     if blocked then
       break
@@ -151,6 +169,23 @@ function Plan.Compose(spec)
       if need > purse then
         blocked = true
       else
+        if bagLeft ~= nil and need > bagLeft and mailGold > 0 and not mailNoted then
+          table.insert(funded, {
+            role = "mail",
+            mail = "gold",
+            name = "gold",
+            count = 1,
+            craft = step.craft,
+          })
+          mailNoted = true
+        end
+        if bagLeft ~= nil then
+          if need >= bagLeft then
+            bagLeft = 0
+          else
+            bagLeft = bagLeft - need
+          end
+        end
         purse = purse - need
         spent = spent + need
         table.insert(funded, step)
@@ -170,6 +205,22 @@ function Plan.Compose(spec)
   }
 end
 
+local function withdrawWords(step)
+  local count = tonumber(step.count) or 0
+  local name = step.name or "item"
+  if count > 1 then
+    return string.format("Withdraw %d %s.", count, name)
+  end
+  return "Withdraw " .. name .. "."
+end
+
+local function mailWords(step)
+  if step and step.mail == "gold" then
+    return "Open the mailbox. Take gold."
+  end
+  return "Open the mailbox. Take mail."
+end
+
 function Plan.StepLine(step)
   if not step then
     return ""
@@ -186,6 +237,10 @@ function Plan.StepLine(step)
       return string.format("Post %d %s. Deposit %s.", count, name, Plan.Plain(deposit))
     end
     return string.format("Post %d %s. %d to post.", count, name, count)
+  elseif step.role == "withdraw" then
+    return withdrawWords(step)
+  elseif step.role == "mail" then
+    return mailWords(step)
   end
   return name
 end
@@ -207,6 +262,10 @@ function Plan.NextLine(step, profit)
       return string.format("Post %d %s. Deposit %s. %s", count, name, Plan.Plain(deposit), profitBit)
     end
     return string.format("Post %d %s. %d to post. %s", count, name, count, profitBit)
+  elseif step.role == "withdraw" then
+    return withdrawWords(step) .. " " .. profitBit
+  elseif step.role == "mail" then
+    return mailWords(step) .. " " .. profitBit
   end
   return nil
 end
@@ -242,13 +301,13 @@ function Plan.Present(spec)
     step.windowHint = hint
     step.line = Plan.StepLine(step)
     if hint then
-      step.line = step.line .. " " .. hint
+      step.line = hint .. " " .. step.line
     end
   end
   local first = steps[1]
   plan.nextLine = Plan.NextLine(first, plan.profit)
   if plan.nextLine and first and first.windowHint then
-    plan.nextLine = plan.nextLine .. " " .. first.windowHint
+    plan.nextLine = first.windowHint .. " " .. plan.nextLine
   end
   local counted = plan.activeSteps
   local word = "steps"
@@ -294,6 +353,26 @@ function Plan.StepsFromAction(action, names)
           cash = cash,
           name = (itemID and names[itemID]) or line.name or "item",
           excessUnits = tonumber(line.excessUnits) or 0,
+        })
+      end
+      local asideID = tonumber(line.itemID)
+      local banked = tonumber(line.bankUnits) or 0
+      if banked > 0 then
+        table.insert(steps, {
+          role = "withdraw",
+          itemID = asideID,
+          count = banked,
+          name = (asideID and names[asideID]) or line.name or "item",
+        })
+      end
+      local mailed = tonumber(line.mailUnits) or 0
+      if mailed > 0 then
+        table.insert(steps, {
+          role = "mail",
+          mail = "item",
+          itemID = asideID,
+          count = mailed,
+          name = (asideID and names[asideID]) or line.name or "item",
         })
       end
     end
@@ -485,7 +564,25 @@ local function priceCraft(session, candidate, crafts)
     if owned < 0 then
       owned = 0
     end
-    local toBuy = need - owned
+    local remain = need - owned
+    local bankHave = session.GetBankCount and session:GetBankCount(itemID) or 0
+    local fromBank = bankHave
+    if fromBank > remain then
+      fromBank = remain
+    end
+    if fromBank < 0 then
+      fromBank = 0
+    end
+    remain = remain - fromBank
+    local mailHave = session.GetMailCount and session:GetMailCount(itemID) or 0
+    local fromMail = mailHave
+    if fromMail > remain then
+      fromMail = remain
+    end
+    if fromMail < 0 then
+      fromMail = 0
+    end
+    local toBuy = remain - fromMail
     local quote
     if toBuy > 0 then
       quote = session:Quote(itemID, toBuy)
@@ -522,6 +619,8 @@ local function priceCraft(session, candidate, crafts)
       itemID = itemID,
       name = row.name,
       ownedUnits = owned,
+      bankUnits = fromBank,
+      mailUnits = fromMail,
       buyUnits = toBuy,
       buyCost = tonumber(quote.cashRequired) or 0,
       purchasedUnits = bought,
@@ -545,7 +644,7 @@ local function priceCraft(session, candidate, crafts)
   }
 end
 
-local function stepsForCraft(candidate, priced, craftId)
+local function stepsForCraft(candidate, priced, craftId, stoneStep)
   local steps = {}
   local lines = priced.lines or {}
   for i = 1, nitems(lines) do
@@ -564,6 +663,37 @@ local function stepsForCraft(candidate, priced, craftId)
         excessUnits = tonumber(line.excessUnits) or 0,
       })
     end
+  end
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local mailed = tonumber(line.mailUnits) or 0
+    if mailed > 0 then
+      table.insert(steps, {
+        role = "mail",
+        mail = "item",
+        craft = craftId,
+        itemID = line.itemID,
+        count = mailed,
+        name = line.name or "item",
+      })
+    end
+  end
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local banked = tonumber(line.bankUnits) or 0
+    if banked > 0 then
+      table.insert(steps, {
+        role = "withdraw",
+        craft = craftId,
+        itemID = line.itemID,
+        count = banked,
+        name = line.name or "item",
+      })
+    end
+  end
+  if stoneStep then
+    stoneStep.craft = craftId
+    table.insert(steps, stoneStep)
   end
   local crafts = tonumber(priced.crafts) or 0
   local net = tonumber(candidate.net) or 0
@@ -679,12 +809,20 @@ function Plan.Portfolio(candidates, resources)
   if not Session or not Session.Begin then
     return nil
   end
-  local cash = tonumber(resources.cash) or 0
-  if cash < 0 then
-    cash = 0
+  local bagCash = tonumber(resources.cash) or 0
+  if bagCash < 0 then
+    bagCash = 0
   end
+  local mailGold = tonumber(resources.mailGold) or 0
+  if mailGold < 0 then
+    mailGold = 0
+  end
+  local cash = bagCash + mailGold
   Session:Begin(cash, cash)
   Session.bags = {}
+  Session.bank = {}
+  Session.mail = {}
+  Session.equipped = {}
   Session.basis = {}
   Session.depth = {}
   Session.stackSizes = {}
@@ -700,6 +838,29 @@ function Plan.Portfolio(candidates, resources)
     local n = tonumber(count) or 0
     if id and n > 0 then
       Session.bags[id] = n
+    end
+  end
+  local bank = resources.bank or {}
+  for itemID, count in pairs(bank) do
+    local id = tonumber(itemID)
+    local n = tonumber(count) or 0
+    if id and n > 0 then
+      Session.bank[id] = n
+    end
+  end
+  local mailed = resources.mailItems or {}
+  for itemID, count in pairs(mailed) do
+    local id = tonumber(itemID)
+    local n = tonumber(count) or 0
+    if id and n > 0 then
+      Session.mail[id] = n
+    end
+  end
+  local equipped = resources.equipped or {}
+  for itemID, on in pairs(equipped) do
+    local id = tonumber(itemID)
+    if id and on then
+      Session.equipped[id] = true
     end
   end
   local basis = resources.basis or {}
@@ -817,6 +978,23 @@ function Plan.Portfolio(candidates, resources)
           local line = kept.lines[lineIndex]
           ownedCosts[lineIndex] = basisCost(Session, line.itemID, line.ownedUnits)
         end
+        local stoneStep
+        local stone = candidate.stone
+        if type(stone) == "table" then
+          local stoneID = tonumber(stone.itemID)
+          local inBags = stoneID and Session:GetBagCount(stoneID) > 0
+          local onPerson = inBags or (stoneID and Session.equipped and Session.equipped[stoneID])
+          local inBank = stoneID and Session:GetBankCount(stoneID) > 0
+          if stoneID and not onPerson and inBank then
+            stoneStep = {
+              role = "withdraw",
+              count = 1,
+              name = stone.name or "transmutation stone",
+              itemID = stoneID,
+              stone = true,
+            }
+          end
+        end
         local reserved = Session:Reserve({
           cash = kept.cash,
           inputs = kept.lines,
@@ -835,8 +1013,18 @@ function Plan.Portfolio(candidates, resources)
               Session.basis[id] = left
             end
           end
+          if stoneStep and stoneStep.itemID then
+            local stoneID = stoneStep.itemID
+            local left = Session:GetBankCount(stoneID) - 1
+            if left > 0 then
+              Session.bank[stoneID] = left
+            else
+              Session.bank[stoneID] = nil
+            end
+            Session.equipped[stoneID] = true
+          end
           local craftId = nitems(accepted) + nitems(flips) + 1
-          local crafted = stepsForCraft(candidate, kept, craftId)
+          local crafted = stepsForCraft(candidate, kept, craftId, stoneStep)
           for stepIndex = 1, nitems(crafted) do
             table.insert(steps, crafted[stepIndex])
           end
@@ -854,6 +1042,8 @@ function Plan.Portfolio(candidates, resources)
 
   local plan = Plan.Present({
     cash = cash,
+    bagCash = bagCash,
+    mailGold = mailGold,
     profit = profit,
     saleProceeds = proceeds,
     auctionOpen = resources.auctionOpen,

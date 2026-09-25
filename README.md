@@ -6,7 +6,7 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.19** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
+Version **0.1.20** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, does not loot mail, and does not use anything outside the WoW client.
 
@@ -160,7 +160,8 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
 | 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone (item 9149) must be in bags or equipped. It is not consumed |
 | Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |
-| Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown |
+| Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown. Cast time stays blank |
+| Arcanite, Primal Might, Elemental Fire | One craft of the best. Not the 20-hour cooldown. Elemental Fire is three, and mastery is not applied. Cast times are 2, 5, and 25 seconds |
 | Epic gems (Ametrine, King's Amber, Dreadstone, Majestic Zircon, Eye of Zul) | Alchemy 450. One shared 20-hour transmute per plan |
 | Cardinal Ruby | Not an action. Minimum skill is unset |
 

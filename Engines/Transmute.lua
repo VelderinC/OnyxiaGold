@@ -251,6 +251,9 @@ function Transmute:OpportunityFromQuote(quote, extra)
     forgoneLine = extra.forgoneLine,
     sharedCooldownRow = extra.sharedCooldownRow and true or false,
     cooldownDecision = extra.cooldownDecision,
+    benchRow = extra.benchRow and true or false,
+    castSeconds = tonumber(extra.castSeconds or def.castSeconds),
+    maxCrafts = tonumber(extra.maxCrafts or def.maxCrafts),
   }
   return OnyxiaGold.OpportunityEngine:New(fields)
 end
@@ -450,14 +453,74 @@ function Transmute:RankCooldown(defs)
   return nil, passthrough
 end
 
+local function benchForgone(runner)
+  if not runner then
+    return "No other single craft beats selling its materials."
+  end
+  local gold = OnyxiaGold.FormatGoldShort(runner.profit)
+  return "Skipping " .. tostring(runner.def.name) .. " gives up " .. gold .. "."
+end
+
+-- One craft of the best no-cooldown transmute in this set.
+-- These spell pages show no cooldown, so this row does not take transmute_20h.
+-- Nil when none of them beat selling the materials.
+function Transmute:RankBench(defs)
+  local ready = {}
+  local passthrough = {}
+  for i = 1, table.getn(defs) do
+    local def = defs[i]
+    local gate = self:RecipeGate(def)
+    if gate == "unknown" then
+      table.insert(passthrough, self:UnknownRow(def))
+    elseif gate == "ready" then
+      local quote = self:QuoteFirstCraft(def)
+      if quote and quote.profit > 0 then
+        table.insert(ready, quote)
+      end
+    end
+  end
+  table.sort(ready, function(a, b)
+    if a.profit == b.profit then
+      return (a.cost or 0) < (b.cost or 0)
+    end
+    return a.profit > b.profit
+  end)
+  if table.getn(ready) < 1 then
+    return nil, passthrough
+  end
+  local best = ready[1]
+  local runner = ready[2]
+  local line = benchForgone(runner)
+  local row = self:OpportunityFromQuote(best, {
+    marketCrafts = 1,
+    totalProfit = best.profit,
+    totalCost = best.cost,
+    name = best.def.name,
+    notes = (best.def.notes or "") .. " " .. line,
+    winnerName = best.def.name,
+    runnerUpName = runner and runner.def.name or nil,
+    runnerUpProfit = runner and runner.profit or 0,
+    forgoneLine = line,
+    benchRow = true,
+    castSeconds = best.def.castSeconds,
+    maxCrafts = 1,
+  })
+  row.maxCrafts = 1
+  row.benchRow = true
+  return row, passthrough
+end
+
 function Transmute:Collect()
   local out = {}
   local cooldown = {}
+  local bench = {}
   local recipes = OnyxiaGold.Data.Transmutes or {}
   for i = 1, table.getn(recipes) do
     local def = recipes[i]
     if cooldownOf(def) == COOLDOWN_GROUP then
       table.insert(cooldown, def)
+    elseif def.singleCraft then
+      table.insert(bench, def)
     else
       local ok, opp = pcall(function()
         return self:Evaluate(def)
@@ -482,6 +545,20 @@ function Transmute:Collect()
   passthrough = passthrough or {}
   for i = 1, table.getn(passthrough) do
     table.insert(out, passthrough[i])
+  end
+  local benchOk, benchRow, benchPass = pcall(function()
+    return self:RankBench(bench)
+  end)
+  if not benchOk then
+    OnyxiaGold.Log:Error("Transmute", "bench rank error: " .. tostring(benchRow))
+    return out
+  end
+  if benchRow then
+    table.insert(out, benchRow)
+  end
+  benchPass = benchPass or {}
+  for i = 1, table.getn(benchPass) do
+    table.insert(out, benchPass[i])
   end
   return out
 end

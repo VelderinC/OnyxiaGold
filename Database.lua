@@ -150,6 +150,9 @@ function DB:EmptyCharacter()
     professions = {},
     -- knownRecipes[profession][spellID] = true. _legacy holds unscoped pre-v4 spells.
     knownRecipes = {},
+    -- recipeBook[profession] = { scannedAt, recipes[spellID] = row }
+    -- Written when Alchemy or Enchanting is open. Kept until that window opens again.
+    recipeBook = {},
     recipeScans = {},
     specialisations = {},
     cooldowns = {},
@@ -200,6 +203,7 @@ function DB:EnsureCharacterShape(rec)
   rec.identity = type(rec.identity) == "table" and rec.identity or {}
   rec.professions = type(rec.professions) == "table" and rec.professions or {}
   rec.knownRecipes = type(rec.knownRecipes) == "table" and rec.knownRecipes or {}
+  rec.recipeBook = type(rec.recipeBook) == "table" and rec.recipeBook or {}
   rec.recipeScans = type(rec.recipeScans) == "table" and rec.recipeScans or {}
   self:MigrateKnownRecipes(rec)
   rec.specialisations = type(rec.specialisations) == "table" and rec.specialisations or {}

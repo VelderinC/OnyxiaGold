@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.31 — Known recipe book
+
+- Opening Alchemy or Enchanting saves every recipe that window shows: spell, reagents, counts, output, and a cooldown when the client returns one. The book stays until that window is opened again.
+- A deterministic recipe from that book can show up in What to do now beside the existing rows, on the same rank score. The next craft is left out when its own profit is not positive. Recipes that already have a hand-written line stay on that line.
+
 ## 0.1.30 — Economic integrity
 
 - A buy is a whole auction. Cash required is the listing price. Leftover units stay in the plan and the next action can use them. A craft is kept only while its own marginal value stays positive.

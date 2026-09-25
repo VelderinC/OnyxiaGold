@@ -879,18 +879,16 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
 end
 
 local function scoreOf(person)
-  local profit = person.economicProfit or 0
-  local conf = (person.opp and person.opp.confidence) or 1
-  local cash = person.cashRequiredNow or 0
-  local score = profit * conf
-  if cash <= 0 then
-    score = score * 2
-  end
   local liquid = OnyxiaGold.Capital and OnyxiaGold.Capital:GetLiquid() or 0
-  if liquid > 0 and liquid < 500000 and cash > 0 then
-    score = score / (1 + cash / liquid)
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ActionScore then
+    return OnyxiaGold.Lots.ActionScore(
+      person.economicProfit or 0,
+      (person.opp and person.opp.confidence) or 1,
+      person.cashRequiredNow or 0,
+      liquid
+    )
   end
-  return score
+  return person.economicProfit or 0
 end
 
 -- Numbers already on the action. Sale unit is GetOpportunitySaleUnit (P25).

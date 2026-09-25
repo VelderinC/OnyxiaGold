@@ -374,10 +374,24 @@ function UI:Create()
     OnyxiaGold.UI:ShowFactoryMail()
   end)
 
+  local heldBtn = CreateFrame("Button", "OnyxiaGoldHeldButton", frame, "UIPanelButtonTemplate")
+  heldBtn:SetWidth(70)
+  heldBtn:SetHeight(22)
+  heldBtn:SetPoint("LEFT", refreshBtn, "RIGHT", 6, 0)
+  heldBtn:SetText("Held")
+  heldBtn:SetScript("OnClick", function()
+    if UI.listMode == "inventory" then
+      UI.listMode = "actions"
+    else
+      UI.listMode = "inventory"
+    end
+    UI:Refresh()
+  end)
+
   local master = CreateFrame("CheckButton", "OnyxiaGoldMasterCheck", frame, "UICheckButtonTemplate")
   master:SetWidth(24)
   master:SetHeight(24)
-  master:SetPoint("LEFT", refreshBtn, "RIGHT", 12, 0)
+  master:SetPoint("LEFT", heldBtn, "RIGHT", 8, 0)
   local masterText = getglobal("OnyxiaGoldMasterCheckText")
   if masterText then
     masterText:SetText("Force TM")
@@ -483,6 +497,7 @@ function UI:Create()
   header:SetHeight(18)
 
   local x = 0
+  local headerCells = {}
   for i = 1, table.getn(COLS) do
     local col = COLS[i]
     local fs = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -492,6 +507,7 @@ function UI:Create()
     fs:SetJustifyV("MIDDLE")
     fs:SetWordWrap(false)
     fs:SetText(col.label)
+    headerCells[col.key] = fs
     setRGB(fs, 1, 0.82, 0)
     x = x + col.width + COL_GAP
   end
@@ -596,7 +612,12 @@ function UI:Create()
       UI:OnActionClick(self)
     end)
     row:SetScript("OnEnter", function(self)
-      UI:ShowActionTooltip(self)
+      if self.factoryItem then
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        UI:FactoryInventoryTooltip(self.factoryItem)
+      else
+        UI:ShowActionTooltip(self)
+      end
     end)
     row:SetScript("OnLeave", function()
       GameTooltip:Hide()
@@ -737,6 +758,9 @@ function UI:Create()
   self.tradeScroll = tradeScroll
   self.tradeEdit = tradeEdit
   self.tradeTotals = tradeTotals
+  self.headerCells = headerCells
+  self.heldButton = heldBtn
+  self.listMode = "actions"
 end
 
 function UI:ShowCapitalTooltip(owner)
@@ -844,6 +868,69 @@ function UI:PaintAuctionPage(page)
       end
     end
   end
+end
+
+local BADGE_COLOR = {
+  USE = { 0.25, 0.75, 0.35 },
+  DE = { 0.55, 0.40, 0.75 },
+  SELL = { 0.85, 0.70, 0.25 },
+  VENDOR = { 0.55, 0.55, 0.55 },
+  WAIT = { 0.80, 0.70, 0.25 },
+  LOCKED = { 0.70, 0.30, 0.25 },
+  ["?"] = { 0.35, 0.35, 0.35 },
+}
+
+local INVENTORY_HEADERS = {
+  name = "Held item",
+  profit = "Worth",
+  cash = "Place",
+  crafts = "Badge",
+  type = "Disposition",
+}
+
+local function paintHeaders(self)
+  local cells = self.headerCells
+  if not cells then
+    return
+  end
+  local inventory = self.listMode == "inventory"
+  for i = 1, table.getn(COLS) do
+    local col = COLS[i]
+    local fs = cells[col.key]
+    if fs then
+      fs:SetText(inventory and INVENTORY_HEADERS[col.key] or col.label)
+    end
+  end
+end
+
+local function clearRow(row)
+  row.action = nil
+  row.factoryItem = nil
+  row.opp = nil
+  if row.cells then
+    for _, fs in pairs(row.cells) do
+      fs:SetText("")
+      setRGB(fs, 1, 1, 1)
+    end
+  end
+  if row.buyButton then
+    row.buyButton:Hide()
+  end
+  row:Hide()
+end
+
+function UI:PaintFactoryInventory(rows)
+  rows = rows or {}
+  self.factoryRows = rows
+end
+
+function UI:FactoryInventoryTooltip(row)
+  if not row or not GameTooltip then
+    return
+  end
+  local color = BADGE_COLOR[row.badge] or BADGE_COLOR["?"]
+  GameTooltip:SetText((row.badge or "?") .. "  " .. tostring(row.name or ""), color[1], color[2], color[3])
+  GameTooltip:AddLine(row.tooltip or "", 1, 1, 1, 1)
 end
 
 function UI:ShowFactoryMail()
@@ -1294,8 +1381,49 @@ function UI:AcceptHouseConfirm()
   end
 end
 
+function UI:UpdateInventoryList()
+  local results = self.factoryRows or {}
+  local n = table.getn(results)
+  FauxScrollFrame_Update(self.scroll, n, NUM_ROWS, ROW_HEIGHT)
+  local offset = FauxScrollFrame_GetOffset(self.scroll) or 0
+  for i = 1, NUM_ROWS do
+    local row = self.rows[i]
+    local item = results[offset + i]
+    if item then
+      row.action = nil
+      row.factoryItem = item
+      row:Show()
+      if row.buyButton then
+        row.buyButton:Hide()
+      end
+      row.cells.name:SetText(tostring(item.name or item.itemID) .. " x" .. tostring(item.count or 0))
+      setRGB(row.cells.name, 1, 1, 1)
+      if item.worth then
+        row.cells.profit:SetText(OnyxiaGold.FormatMoney(item.worth))
+      else
+        row.cells.profit:SetText("")
+      end
+      setRGB(row.cells.profit, 1, 1, 1)
+      row.cells.cash:SetText(item.place or "")
+      setRGB(row.cells.cash, 1, 1, 1)
+      row.cells.crafts:SetText(item.badge or "?")
+      local color = BADGE_COLOR[item.badge] or BADGE_COLOR["?"]
+      setRGB(row.cells.crafts, color[1], color[2], color[3])
+      row.cells.type:SetText(item.label or "")
+      setRGB(row.cells.type, color[1], color[2], color[3])
+    else
+      clearRow(row)
+    end
+  end
+end
+
 function UI:UpdateList()
   if not self.rows then
+    return
+  end
+  paintHeaders(self)
+  if self.listMode == "inventory" then
+    self:UpdateInventoryList()
     return
   end
   local results = {}
@@ -1312,6 +1440,7 @@ function UI:UpdateList()
     row.action = action
     row.opp = action and action.sourceOpp or nil
     if action then
+      row.factoryItem = nil
       row:Show()
       local label = tostring(offset + i) .. ". " .. rowTitle(action)
       row.cells.name:SetText(label)
@@ -1339,8 +1468,7 @@ function UI:UpdateList()
       if row.buyButton then
         row.buyButton:Hide()
       end
-      paintTone(row, false)
-      row:Hide()
+      clearRow(row)
     end
   end
 end
@@ -1374,6 +1502,21 @@ function UI:Refresh()
   end
 
   self:RefreshHeader()
+
+  if self.listMode == "inventory" then
+    local held = {}
+    if OnyxiaGold.FactoryInventory and OnyxiaGold.FactoryInventory.Rows then
+      held = OnyxiaGold.FactoryInventory:Rows()
+    end
+    self:PaintFactoryInventory(held)
+    if not OnyxiaGold.Scanner:IsScanning() then
+      self:SetStatus(tostring(table.getn(held)) .. " held items. Badge and tooltip say worth and why.")
+    end
+    self:UpdateList()
+    self:PaintScanProgress()
+    self:RefreshTrades()
+    return
+  end
 
   local actions = {}
   if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetActions then

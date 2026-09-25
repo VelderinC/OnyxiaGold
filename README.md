@@ -178,7 +178,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)
 - Recursive crafting, farm GPH, and automated buy/post/loot are out of scope
 - Neutral AH is not partitioned yet (player faction market only)
-- Planner session view is greedy v1; 0.1.3 will refine ranking and copy
+- The planner reserves cash, bag units, and a cloned auction book inside one plan. It does not yet model output liquidity, and bank stock is still not bag stock.
 - DE skill-floor table is centralized but must be confirmed on Warmane before buy recommendations
 
 ## Sharing logs
@@ -227,7 +227,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 
 ## Future roadmap
 
-1. **0.1.3** — Factory Operations. Phase A (this build) corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Still ahead: session reservation, Factory Mail, Factory Inventory.
+1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth. Still ahead: Factory Mail, Factory Inventory.
 2. **v0.2.0** — Full disenchant expected-value engine (weapon vs armour, iLevel, quality; Full Scan feed)
 3. **v0.2.1+** — Enchanting conversions: Abyssal Shatter, Void Shatter (confirmed 3.3.5 data), vellum scrolls
 4. **v0.3+** — Recursive capability-aware transformation graph (GLOBAL paths vs EXECUTABLE paths)

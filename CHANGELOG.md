@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.3 — Factory Operations, Phase A
+## 0.1.3 — Factory Operations, Phase A and Phase B
 
-Foundational planner and snapshot corrections. Session reservation, Factory Mail, and Factory Inventory are not in this version.
+Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials, and cloned auction depth inside one session plan. Factory Mail and Factory Inventory are not in this version.
 
 - Transmute: Titanium (spell 60350) requires Alchemy 395. 440 is difficulty colour, not the skill requirement.
 - Min, P10, P25, median, P75, and weighted mean are computed from the full runtime buyout book. Only the persisted acquisition depth is truncated. `depthCoveredQuantity` is stored separately from `buyoutQuantity`. `GetAcquisitionQuote` will not price past covered depth.
@@ -11,6 +11,7 @@ Foundational planner and snapshot corrections. Session reservation, Factory Mail
 - A mailbox with unloaded mail persists `snapshotComplete = false` plus `visibleCount` and `totalCount`. The UI does not present that subtotal as exact.
 - Own auctions persist `shown`, `total`, and `complete` (`shown >= total`). An incomplete owner list shows Listed as approximate.
 - Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`. `sensibleCrafts` does not yet apply an output-liquidity model.
+- `SessionState` rebuilds on each plan. A selected action reserves its cash, the bag units it uses, and the auction units it would buy. The next action sees what remains. The saved market snapshot is not modified.
 
 ## 0.1.2 — Character State & Capital Awareness
 

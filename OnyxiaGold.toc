@@ -31,5 +31,6 @@ Mail.lua
 OwnedAuctions.lua
 Capabilities.lua
 OpportunityEngine.lua
+SessionState.lua
 ActionPlanner.lua
 UI.lua

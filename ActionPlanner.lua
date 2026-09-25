@@ -10,6 +10,10 @@
   Post-mail deployable comes from Capital:GetSpendableAfterMail(), which
   reserves against liquid + claimable mail.
 
+  Each Refresh rebuilds SessionState. A selected action reserves its cash,
+  the bag units it consumes, and the cloned auction depth it would buy.
+  The saved market snapshot is not modified.
+
   Capacity fields stay separate:
     marketProfitableCrafts, physicalPossibleCrafts, affordableCrafts,
     capabilityAllowedCrafts, executableCrafts, sensibleCrafts.
@@ -67,7 +71,12 @@ local function craftCost(opp, crafts, owned)
   local toBuy = needed - fromOwned
   local cash = 0
   if toBuy > 0 then
-    cash = OnyxiaGold.Prices:GetAcquisitionCost(itemID, toBuy)
+    local session = OnyxiaGold.SessionState
+    if session and session.IsActive and session:IsActive() then
+      cash = session:AcquisitionCost(itemID, toBuy)
+    else
+      cash = OnyxiaGold.Prices:GetAcquisitionCost(itemID, toBuy)
+    end
     if not cash then
       return nil, nil, nil, false
     end
@@ -99,9 +108,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   -- minus gold this session has already assigned.
   afterMailDeployable = tonumber(afterMailDeployable) or 0
   local itemID, inCount = inputSpec(opp)
+  local session = OnyxiaGold.SessionState
+  local sessionOn = session and session.IsActive and session:IsActive()
   local owned = 0
-  if itemID and OnyxiaGold.Inventory then
-    owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID)
+  if itemID then
+    if sessionOn then
+      owned = session:GetBagCount(itemID)
+    elseif OnyxiaGold.Inventory then
+      owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(itemID)
+    end
   end
   local cap = { executable = true }
   if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
@@ -112,9 +127,14 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   if marketProfitable == nil then
     marketProfitable = tonumber(opp.maxProfitableCrafts) or 0
   end
+  -- Session planning buys from the remaining clone, not the full live book.
   local buyoutQty = 0
-  if itemID and OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
-    buyoutQty = OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
+  if itemID then
+    if sessionOn then
+      buyoutQty = session:CoveredQuantity(itemID)
+    elseif OnyxiaGold.Prices and OnyxiaGold.Prices.GetBuyoutQuantity then
+      buyoutQty = OnyxiaGold.Prices:GetBuyoutQuantity(itemID) or 0
+    end
   end
   local physical = 0
   if inCount > 0 then
@@ -124,10 +144,12 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   -- Capability is not the same number as physical stock.
   -- No cooldown cap: the character can perform every physically possible craft.
   -- Cooldown: at most one. Missing profession/recipe/skill: zero.
+  local cooldown = opp.requirements and opp.requirements.cooldown
+  local cooldownTaken = sessionOn and cooldown and session:CooldownUsed(cooldown)
   local capabilityAllowed = 0
-  if cap.executable then
+  if cap.executable and not cooldownTaken then
     capabilityAllowed = physical
-    if opp.requirements and opp.requirements.cooldown and capabilityAllowed > 1 then
+    if cooldown and capabilityAllowed > 1 then
       capabilityAllowed = 1
     end
   end
@@ -188,6 +210,13 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
   if opp.oldestDataAge and opp.oldestDataAge > (OnyxiaGold.Config.FullScanStaleSeconds or 3600) then
     person.state = "STALE_DATA"
     person.reason = "Market data stale"
+    return person
+  end
+
+  if cooldownTaken then
+    person.state = "COOLDOWN_RESERVED"
+    person.reason = "Cooldown already reserved in this plan"
+    person.capabilityAllowedCrafts = 0
     return person
   end
 
@@ -329,6 +358,37 @@ local function actionFromPerson(person, index)
   }
 end
 
+function Planner:ReserveSelected(person)
+  local session = OnyxiaGold.SessionState
+  if not session or not session.IsActive or not session:IsActive() then
+    return true
+  end
+  local opp = person.opp or {}
+  local itemID = opp.inputItemIDs and opp.inputItemIDs[1]
+  local crafts = person.sensibleCrafts or person.executableCrafts or 0
+  local inCount = tonumber(person.inputCount) or 1
+  if inCount < 1 then
+    inCount = 1
+  end
+  local needed = crafts * inCount
+  local fromOwned = person.ownedInputs or 0
+  if fromOwned > needed then
+    fromOwned = needed
+  end
+  if fromOwned < 0 then
+    fromOwned = 0
+  end
+  local toBuy = needed - fromOwned
+  local cooldown = opp.requirements and opp.requirements.cooldown
+  return session:Reserve({
+    itemID = itemID,
+    cash = person.cashRequiredNow or 0,
+    ownedUnits = fromOwned,
+    buyUnits = toBuy,
+    cooldown = cooldown,
+  })
+end
+
 function Planner:Refresh()
   self.actions = {}
   self.locked = {}
@@ -354,6 +414,10 @@ function Planner:Refresh()
       left = 0
     end
     return left
+  end
+
+  if OnyxiaGold.SessionState and OnyxiaGold.SessionState.Begin then
+    OnyxiaGold.SessionState:Begin(deployable, afterMailSpendable)
   end
 
   local remaining = deployable
@@ -395,11 +459,17 @@ function Planner:Refresh()
     end
     used[bestI] = true
     local person = people[bestI]
-    remaining = remaining - (person.cashRequiredNow or 0)
-    if remaining < 0 then
-      remaining = 0
+    if self:ReserveSelected(person) then
+      if OnyxiaGold.SessionState and OnyxiaGold.SessionState:IsActive() then
+        remaining = OnyxiaGold.SessionState:RemainingCash()
+      else
+        remaining = remaining - (person.cashRequiredNow or 0)
+        if remaining < 0 then
+          remaining = 0
+        end
+      end
+      table.insert(self.actions, actionFromPerson(person, table.getn(self.actions) + 1))
     end
-    table.insert(self.actions, actionFromPerson(person, table.getn(self.actions) + 1))
   end
 
   local unlockedByMail = 0
@@ -416,7 +486,8 @@ function Planner:Refresh()
         or person.state == "LOCKED_RECIPE"
         or person.state == "UNKNOWN_RECIPE_STATE"
         or person.state == "STALE_DATA"
-        or person.state == "UNPROFITABLE" then
+        or person.state == "UNPROFITABLE"
+        or person.state == "COOLDOWN_RESERVED" then
         table.insert(self.locked, person)
       end
     end
@@ -474,6 +545,7 @@ function Planner:Refresh()
     deployable = deployable,
     deployableAfterMail = afterMailSpendable,
     remaining = remaining,
+    reservations = OnyxiaGold.SessionState and OnyxiaGold.SessionState.reserved or nil,
     claimable = claimable,
     pending = OnyxiaGold.Capital and OnyxiaGold.Capital:GetPendingAuctionGold() or 0,
     unknownRecipes = 0,

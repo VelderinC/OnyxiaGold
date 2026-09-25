@@ -21,6 +21,14 @@ end
 OnyxiaGold.Data.Watchlist = {
   entry("saronite_bar", I.SARONITE_BAR, "Transmute"),
   entry("titanium_bar", I.TITANIUM_BAR, "Transmute"),
+  entry("lesser_magic_essence", I.LESSER_MAGIC_ESSENCE, "Essence"),
+  entry("greater_magic_essence", I.GREATER_MAGIC_ESSENCE, "Essence"),
+  entry("lesser_astral_essence", I.LESSER_ASTRAL_ESSENCE, "Essence"),
+  entry("greater_astral_essence", I.GREATER_ASTRAL_ESSENCE, "Essence"),
+  entry("lesser_mystic_essence", I.LESSER_MYSTIC_ESSENCE, "Essence"),
+  entry("greater_mystic_essence", I.GREATER_MYSTIC_ESSENCE, "Essence"),
+  entry("lesser_nether_essence", I.LESSER_NETHER_ESSENCE, "Essence"),
+  entry("greater_nether_essence", I.GREATER_NETHER_ESSENCE, "Essence"),
   entry("lesser_eternal_essence", I.LESSER_ETERNAL_ESSENCE, "Essence"),
   entry("greater_eternal_essence", I.GREATER_ETERNAL_ESSENCE, "Essence"),
   entry("lesser_planar_essence", I.LESSER_PLANAR_ESSENCE, "Essence"),
@@ -36,8 +44,6 @@ OnyxiaGold.Data.Watchlist = {
   entry("arcane_dust", I.ARCANE_DUST, "Enchanting"),
   entry("mageweave_cloth", I.MAGEWEAVE_CLOTH, "Cloth"),
   entry("vision_dust", I.VISION_DUST, "Enchanting"),
-  entry("lesser_nether_essence", I.LESSER_NETHER_ESSENCE, "Essence"),
-  entry("greater_nether_essence", I.GREATER_NETHER_ESSENCE, "Essence"),
   entry("abyss_crystal", I.ABYSS_CRYSTAL, "Enchanting"),
   entry("infinite_dust", I.INFINITE_DUST, "Enchanting"),
 }

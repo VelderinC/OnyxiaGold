@@ -43,6 +43,11 @@
 
 - Replace `math.mod` with the Lua 5.1 `%` operator so logging no longer crashes on Warmane 3.3.5.
 
+## 0.1.5 — Skill 1 actions
+
+- Magic, Astral, Mystic, and Nether essence pairs are item-use conversions. They need no profession and no skill, so they can be the next row at Alchemy 1 and Enchanting 1.
+- A recipe above the live skill stays locked. Skill 1 still does not plan Titanium, an epic gem, or a high-level disenchant.
+
 ## 0.1.5 — Version watermark
 
 - Always-visible top-left watermark shows OnyxiaGold and the TOC version.

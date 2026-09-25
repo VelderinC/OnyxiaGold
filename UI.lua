@@ -11,6 +11,10 @@ local UI = OnyxiaGold.UI
 
 local FRAME_WIDTH = 1080
 local FRAME_HEIGHT = 884
+local MIN_WIDTH = 1080
+local MIN_HEIGHT = 480
+local MAX_WIDTH = 1600
+local MAX_HEIGHT = 1200
 local NUM_ROWS = 8
 local ROW_HEIGHT = 58
 local HEADER_Y = -188
@@ -259,6 +263,22 @@ local function professionLine()
   return table.concat(parts, "   ")
 end
 
+local function initialWindowSize()
+  local width, height = FRAME_WIDTH, FRAME_HEIGHT
+  local settings = OnyxiaGoldDB and OnyxiaGoldDB.settings
+  if type(settings) == "table" then
+    local w = tonumber(settings.windowWidth)
+    local h = tonumber(settings.windowHeight)
+    if w and w >= MIN_WIDTH and w <= MAX_WIDTH then
+      width = w
+    end
+    if h and h >= MIN_HEIGHT and h <= MAX_HEIGHT then
+      height = h
+    end
+  end
+  return width, height
+end
+
 local function identityLine()
   local id = OnyxiaGold.CharacterState and OnyxiaGold.CharacterState:GetIdentity()
   if not id or not id.name then
@@ -277,12 +297,16 @@ function UI:Create()
   OnyxiaGold.Log:Debug("UI", "Creating main window")
 
   local frame = CreateFrame("Frame", "OnyxiaGoldFrame", UIParent)
-  frame:SetWidth(FRAME_WIDTH)
-  frame:SetHeight(FRAME_HEIGHT)
+  local width, height = initialWindowSize()
+  frame:SetWidth(width)
+  frame:SetHeight(height)
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   frame:SetFrameStrata("HIGH")
   frame:SetToplevel(true)
   frame:SetMovable(true)
+  frame:SetResizable(true)
+  frame:SetMinResize(MIN_WIDTH, MIN_HEIGHT)
+  frame:SetMaxResize(MAX_WIDTH, MAX_HEIGHT)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", function()
@@ -640,12 +664,12 @@ function UI:Create()
 
   local status = addLabel(frame, "Open the Auction House, then Quick Scan.", "GameFontDisable")
   status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 16)
-  status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 16)
+  status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -28, 16)
   status:SetJustifyH("LEFT")
 
   local scanBar = CreateFrame("StatusBar", "OnyxiaGoldScanBar", frame)
   scanBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 36)
-  scanBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 36)
+  scanBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -28, 36)
   scanBar:SetHeight(16)
   scanBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
   scanBar:SetStatusBarColor(0.86, 0.62, 0.12)
@@ -735,6 +759,42 @@ function UI:Create()
     end
   end)
   tradeScroll:SetScrollChild(tradeEdit)
+
+  local grip = CreateFrame("Button", "OnyxiaGoldResizeGrip", frame)
+  grip:SetWidth(16)
+  grip:SetHeight(16)
+  grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 6)
+  grip:SetFrameLevel(frame:GetFrameLevel() + 20)
+  grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+  grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+  grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+  grip:SetScript("OnMouseDown", function()
+    frame:StartSizing("BOTTOMRIGHT")
+  end)
+  grip:SetScript("OnMouseUp", function()
+    frame:StopMovingOrSizing()
+    UI:SaveWindowSize()
+  end)
+  grip:SetScript("OnEnter", function(self)
+    if not GameTooltip then
+      return
+    end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Drag to resize", 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  grip:SetScript("OnLeave", function()
+    if GameTooltip then
+      GameTooltip:Hide()
+    end
+  end)
+
+  frame:SetScript("OnSizeChanged", function()
+    if UI.rows then
+      UI:UpdateList()
+    end
+    UI:SaveWindowSize()
+  end)
 
   self.frame = frame
   self.quickScanButton = quickBtn
@@ -1381,15 +1441,75 @@ function UI:AcceptHouseConfirm()
   end
 end
 
+function UI:VisibleRowCount()
+  local frame = self.frame
+  if not frame or not frame.GetHeight then
+    return NUM_ROWS
+  end
+  local height = tonumber(frame:GetHeight())
+  if not height or height <= 0 then
+    return NUM_ROWS
+  end
+  local listHeight = height - (0 - LIST_TOP) - LIST_BOTTOM
+  local count = math.floor(listHeight / ROW_HEIGHT)
+  if count < 1 then
+    count = 1
+  end
+  if count > NUM_ROWS then
+    count = NUM_ROWS
+  end
+  return count
+end
+
+function UI:SaveWindowSize()
+  local frame = self.frame
+  if not frame or not frame.GetWidth then
+    return
+  end
+  local width = tonumber(frame:GetWidth())
+  local height = tonumber(frame:GetHeight())
+  if not width or not height or width < (MIN_WIDTH - 1) or height < (MIN_HEIGHT - 1) then
+    return
+  end
+  width = math.floor(width + 0.5)
+  height = math.floor(height + 0.5)
+  if width < MIN_WIDTH then
+    width = MIN_WIDTH
+  end
+  if height < MIN_HEIGHT then
+    height = MIN_HEIGHT
+  end
+  if width > MAX_WIDTH then
+    width = MAX_WIDTH
+  end
+  if height > MAX_HEIGHT then
+    height = MAX_HEIGHT
+  end
+  if OnyxiaGold.Database and OnyxiaGold.Database.Ensure then
+    OnyxiaGold.Database:Ensure()
+  end
+  if type(OnyxiaGoldDB) ~= "table" then
+    return
+  end
+  if type(OnyxiaGoldDB.settings) ~= "table" then
+    OnyxiaGoldDB.settings = {}
+  end
+  OnyxiaGoldDB.settings.windowWidth = width
+  OnyxiaGoldDB.settings.windowHeight = height
+end
+
 function UI:UpdateInventoryList()
   local results = self.factoryRows or {}
   local n = table.getn(results)
-  FauxScrollFrame_Update(self.scroll, n, NUM_ROWS, ROW_HEIGHT)
+  local visible = self:VisibleRowCount()
+  FauxScrollFrame_Update(self.scroll, n, visible, ROW_HEIGHT)
   local offset = FauxScrollFrame_GetOffset(self.scroll) or 0
   for i = 1, NUM_ROWS do
     local row = self.rows[i]
     local item = results[offset + i]
-    if item then
+    if i > visible or not item then
+      clearRow(row)
+    else
       row.action = nil
       row.factoryItem = item
       row:Show()
@@ -1411,8 +1531,6 @@ function UI:UpdateInventoryList()
       setRGB(row.cells.crafts, color[1], color[2], color[3])
       row.cells.type:SetText(item.label or "")
       setRGB(row.cells.type, color[1], color[2], color[3])
-    else
-      clearRow(row)
     end
   end
 end
@@ -1431,11 +1549,15 @@ function UI:UpdateList()
     results = OnyxiaGold.ActionPlanner:GetActions()
   end
   local n = table.getn(results)
-  FauxScrollFrame_Update(self.scroll, n, NUM_ROWS, ROW_HEIGHT)
+  local visible = self:VisibleRowCount()
+  FauxScrollFrame_Update(self.scroll, n, visible, ROW_HEIGHT)
   local offset = FauxScrollFrame_GetOffset(self.scroll) or 0
 
   for i = 1, NUM_ROWS do
     local row = self.rows[i]
+    if i > visible then
+      clearRow(row)
+    else
     local action = results[offset + i]
     row.action = action
     row.opp = action and action.sourceOpp or nil
@@ -1469,6 +1591,7 @@ function UI:UpdateList()
         row.buyButton:Hide()
       end
       clearRow(row)
+    end
     end
   end
 end

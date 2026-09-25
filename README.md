@@ -6,7 +6,7 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.17** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
+Version **0.1.18** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, does not loot mail, and does not use anything outside the WoW client.
 

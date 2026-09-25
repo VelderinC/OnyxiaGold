@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16 — One 20-hour transmute
+
+- One cooldown row. It ranks the epic gems, the eternal cycle, and the old 20-hour metals this character can perform. It names the winner and the gold given up by skipping the runner-up. If none beat selling the materials, the row says skip. Still one cast.
+- Titanium, Earthsiege, and Skyflare stay off that cooldown. Cardinal Ruby, Eternal Might, and the discovered primals stay out because their minimum skill is unset.
+- Eye of Zul stays three Forest Emeralds and no eternal. Transmute Master stays the 1.20 expectation, and only on transmutes that support it.
+- Unknown recipe state stays unknown until a profession scan. A recipe above the live Alchemy or Enchanting skill is locked and is not the next row. Skill 1 does not plan Titanium, an epic gem, or a high-level disenchant.
+
 ## 0.1.15 — Preview filters
 
 - Show unlearned Alchemy and Enchanting recipes, and cash-short conversions with no profession, as skill or gold previews rather than buys.
@@ -39,13 +46,6 @@
 ## 0.1.5 — Version watermark
 
 - Always-visible top-left watermark shows OnyxiaGold and the TOC version.
-
-## 0.1.4 — One 20-hour transmute
-
-- One cooldown row. It ranks the epic gems, the eternal cycle, and the old 20-hour metals this character can perform. It names the winner and the gold given up by skipping the runner-up. If none beat selling the materials, the row says skip. Still one cast.
-- Titanium, Earthsiege, and Skyflare stay off that cooldown. Cardinal Ruby, Eternal Might, and the discovered primals stay out because their minimum skill is unset.
-- Eye of Zul stays three Forest Emeralds and no eternal. Transmute Master stays the 1.20 expectation, and only on transmutes that support it.
-- Unknown recipe state stays unknown until a profession scan. A recipe above the live Alchemy or Enchanting skill is locked and is not the next row. Skill 1 does not plan Titanium, an epic gem, or a high-level disenchant.
 
 ## 0.1.3 — Factory Operations, Phase A and Phase B
 

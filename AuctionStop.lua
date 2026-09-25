@@ -109,6 +109,105 @@ function Stop.PostBuyout(unit, stackCount)
   return unit * stackCount
 end
 
+-- His cheapest buyout for this item, in copper per unit. Nil if he has none.
+function Stop.OwnCheapestUnit(itemID)
+  itemID = tonumber(itemID)
+  local row = OnyxiaGold.Database and OnyxiaGold.Database.GetCharacter and OnyxiaGold.Database:GetCharacter()
+  local listings = row and row.auctions and row.auctions.listings
+  if not itemID or type(listings) ~= "table" then
+    return nil
+  end
+  local best
+  for i = 1, table.getn(listings) do
+    local listing = listings[i]
+    local count = listing and tonumber(listing.count) or 0
+    local buyout = listing and tonumber(listing.buyout) or 0
+    if listing and listing.itemID == itemID and count > 0 and buyout > 0 then
+      local unit = math.floor(buyout / count)
+      if unit > 0 and (not best or unit < best) then
+        best = unit
+      end
+    end
+  end
+  return best
+end
+
+-- Deposit for the stack already in the post slot. Nil when the client has no number.
+-- Durations are the 3.3.5 dropdown values: 1, 2, 3. No deposit formula lives here.
+function Stop.DepositText(stackCount)
+  if type(CalculateAuctionDeposit) ~= "function" then
+    return nil
+  end
+  stackCount = tonumber(stackCount) or 1
+  if stackCount < 1 then
+    stackCount = 1
+  end
+  local labels = {
+    AUCTION_DURATION_ONE or "12 hours",
+    AUCTION_DURATION_TWO or "24 hours",
+    AUCTION_DURATION_THREE or "48 hours",
+  }
+  local parts = {}
+  for i = 1, 3 do
+    local ok, value = pcall(CalculateAuctionDeposit, i, stackCount)
+    value = ok and tonumber(value) or nil
+    if value and value > 0 then
+      table.insert(parts, labels[i] .. " " .. money(value))
+    end
+  end
+  if table.getn(parts) < 1 then
+    return nil
+  end
+  return "Deposit " .. table.concat(parts, ", ") .. "."
+end
+
+-- leave: his auction is already the cheapest, so the box is not moved under it.
+-- post: a price at or above the floor. One copper under someone else's minimum when that stays above the floor.
+function Stop.DecidePost(itemID, floorUnit, stackCount)
+  floorUnit = tonumber(floorUnit) or 0
+  if floorUnit < 1 then
+    floorUnit = 1
+  end
+  stackCount = tonumber(stackCount) or 1
+  if stackCount < 1 then
+    stackCount = 1
+  end
+  local own = Stop.OwnCheapestUnit(itemID)
+  local market
+  if itemID and OnyxiaGold.Prices and OnyxiaGold.Prices.GetMarketMinimum then
+    market = OnyxiaGold.Prices:GetMarketMinimum(itemID)
+  end
+  local deposit = Stop.DepositText(stackCount)
+  local depositLine = deposit or "Put the stack in the post slot. The deposit is what CalculateAuctionDeposit returns."
+  if own and (not market or own <= market) then
+    return {
+      decision = "leave",
+      postCopper = nil,
+      line = "Leave it. Your auction is already the cheapest. " .. depositLine,
+    }
+  end
+  local unit = floorUnit
+  if market and market > floorUnit then
+    local under = market - 1
+    if under >= floorUnit then
+      unit = under
+    end
+  end
+  if own and unit < own and (not market or market >= own) then
+    return {
+      decision = "leave",
+      postCopper = nil,
+      line = "Leave it. Your auction is already the cheapest. " .. depositLine,
+    }
+  end
+  return {
+    decision = "post",
+    postCopper = Stop.PostBuyout(unit, stackCount),
+    unit = unit,
+    line = "Post at " .. money(Stop.PostBuyout(unit, stackCount)) .. ". " .. depositLine,
+  }
+end
+
 function Stop.Classify(auction, stopUnit, recipeCount, remaining)
   auction = auction or {}
   stopUnit = tonumber(stopUnit) or 0
@@ -615,6 +714,8 @@ end
 
 function Stop:Bind(action)
   self.postCopper = nil
+  self.postLine = nil
+  self.postDecision = nil
   local person = action and action.person
   local opp = person and person.opp
   local lines = person and person.inputLines
@@ -670,7 +771,10 @@ function Stop:Bind(action)
     vendor = tonumber(info[11]) or 0
   end
   local unit = self.PostFloorUnit(inputCost, per, vendor)
-  self.postCopper = self.PostBuyout(unit, 1)
+  local decided = self.DecidePost(outID, unit, 1)
+  self.postCopper = decided and decided.postCopper or nil
+  self.postLine = decided and decided.line or nil
+  self.postDecision = decided and decided.decision or nil
   return true
 end
 
@@ -746,8 +850,11 @@ function Stop:OnHouseShown()
   self.page = 0
   self.paging = true
   self:SendQuery()
-  if self.postCopper and OnyxiaGold.UI and OnyxiaGold.UI.ApplyPostPrice then
+  if self.postDecision == "post" and self.postCopper and OnyxiaGold.UI and OnyxiaGold.UI.ApplyPostPrice then
     OnyxiaGold.UI:ApplyPostPrice(self.postCopper)
+  end
+  if self.postLine and OnyxiaGold.UI and OnyxiaGold.UI.ShowPostRow then
+    OnyxiaGold.UI:ShowPostRow(self.postLine)
   end
 end
 

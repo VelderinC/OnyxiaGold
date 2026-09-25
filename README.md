@@ -162,6 +162,7 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |
 | Skyflare Diamond | Alchemy 430, spell 57425. Bloodstone, Chalcedony, Eternal Air. No cooldown. Cast time stays blank |
 | Arcanite, Primal Might, Elemental Fire | One craft of the best. Not the 20-hour cooldown. Elemental Fire is three, and mastery is not applied. Cast times are 2, 5, and 25 seconds |
+| Post row | Deposit comes from `CalculateAuctionDeposit`. His cheapest auction is left alone. He presses Blizzard's button |
 | Epic gems (Ametrine, King's Amber, Dreadstone, Majestic Zircon, Eye of Zul) | Alchemy 450. One shared 20-hour transmute per plan |
 | Cardinal Ruby | Not an action. Minimum skill is unset |
 

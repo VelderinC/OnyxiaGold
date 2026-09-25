@@ -822,6 +822,12 @@ function UI:PaintAuctionPage(page)
   end
 end
 
+function UI:ShowPostRow(text)
+  if self.SetStatus then
+    self:SetStatus(text or "")
+  end
+end
+
 function UI:ApplyPostPrice(copper)
   copper = tonumber(copper) or 0
   if copper <= 0 or not BuyoutPrice then

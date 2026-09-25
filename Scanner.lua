@@ -450,9 +450,12 @@ function Scanner:MergePage(rows)
           rec.minStackBuyout = row.buyoutPrice
         end
         rec.buyoutCopperSum = rec.buyoutCopperSum + (unit * row.count)
-        local bucket = rec.buyoutLevels[unit]
+        -- Same unit price with a different stack size stays its own row.
+        local stack = row.count
+        local key = string.format("%d:%d", unit, stack)
+        local bucket = rec.buyoutLevels[key]
         if not bucket then
-          rec.buyoutLevels[unit] = { p = unit, q = row.count, n = 1 }
+          rec.buyoutLevels[key] = { p = unit, q = row.count, n = 1, s = stack }
         else
           bucket.q = bucket.q + row.count
           bucket.n = bucket.n + 1
@@ -607,12 +610,15 @@ function Scanner:SortedDepth(levelMap)
   end
   for price, bucket in pairs(levelMap) do
     if type(bucket) == "table" and bucket.p and bucket.q and bucket.q > 0 then
-      table.insert(list, { p = bucket.p, q = bucket.q, n = bucket.n or 1 })
+      table.insert(list, { p = bucket.p, q = bucket.q, n = bucket.n or 1, s = bucket.s })
     elseif type(price) == "number" and price > 0 then
       table.insert(list, { p = price, q = bucket, n = 1 })
     end
   end
   table.sort(list, function(a, b)
+    if a.p == b.p then
+      return (a.s or 0) < (b.s or 0)
+    end
     return a.p < b.p
   end)
   return list

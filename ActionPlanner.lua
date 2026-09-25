@@ -275,7 +275,12 @@ local function planInputs(opp, crafts)
       buyCost = part
       cash = cash + part
     end
-    local unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
+    local unit
+    if opp and opp.saleExitUnknown then
+      unit = tonumber(opp.vendorUnit) or 0
+    else
+      unit = OnyxiaGold.Prices:GetLiquidationPrice(itemID) or 0
+    end
     ownedValue = ownedValue + owned * unit
     table.insert(lines, {
       itemID = itemID,
@@ -492,7 +497,10 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     if count < 1 then
       count = 1
     end
-    local have = id and ((bagCount(id) or 0) + coveredBuyout(id)) or 0
+    local have = id and (bagCount(id) or 0) or 0
+    if not (opp and opp.ownedOnly) then
+      have = have + (id and coveredBuyout(id) or 0)
+    end
     local craftsHere = math.floor(have / count)
     if not physical or craftsHere < physical then
       physical = craftsHere

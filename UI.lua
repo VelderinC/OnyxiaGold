@@ -373,12 +373,28 @@ function UI:Create()
       cx = cx + col.width + COL_GAP
     end
 
+    row:RegisterForClicks("LeftButtonUp")
+    row:SetScript("OnClick", function(self)
+      UI:OnActionClick(self)
+    end)
     row:SetScript("OnEnter", function(self)
       UI:ShowActionTooltip(self)
     end)
     row:SetScript("OnLeave", function()
       GameTooltip:Hide()
     end)
+
+    local buy = CreateFrame("Button", "OnyxiaGoldRowBuy" .. i, row, "UIPanelButtonTemplate")
+    buy:SetWidth(56)
+    buy:SetHeight(22)
+    buy:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+    buy:SetText("Buy")
+    buy:SetFrameLevel(row:GetFrameLevel() + 2)
+    buy:SetScript("OnClick", function()
+      UI:OnBuyClick(row)
+    end)
+    buy:Hide()
+    row.buyButton = buy
 
     rows[i] = row
   end
@@ -610,6 +626,8 @@ function UI:ShowActionTooltip(row)
   end
   if action.kind == "COLLECT_MAIL" then
     GameTooltip:AddLine("Visit a mailbox and collect gold. The addon will not loot mail.", 1, 0.85, 0.4, 1)
+  elseif action.kind == "BUY_AND_CRAFT" then
+    GameTooltip:AddLine("Click the row to search the Auction House. Buy purchases one listing at or under the stop.", 1, 0.85, 0.4, 1)
   else
     GameTooltip:AddLine("Planning only — OnyxiaGold will not buy or craft for you.", 0.55, 0.55, 0.55, 1)
   end
@@ -824,6 +842,134 @@ function UI:RefreshMarketStatus()
   self:RefreshHeader()
 end
 
+function UI:BuyStateText(state)
+  local status = state and state.status
+  if status == "closed" then
+    return "Auction House is closed."
+  elseif status == "search" then
+    local name = state.name
+    if name and name ~= "" then
+      return "Searching " .. name .. "."
+    end
+    return "Searching the Auction House."
+  elseif status == "settle" then
+    return "Waiting for the auction page."
+  elseif status == "none" then
+    return "Nothing at or under the stop."
+  elseif status == "large" then
+    return "No listing at or under the stop fits the remaining quantity."
+  elseif status == "busy" then
+    return "Auction House is busy. Click the row again."
+  elseif status == "stale" then
+    return "The listing changed. Click the row to search again."
+  elseif status == "done" then
+    return "That row has the quantity it still needs."
+  elseif status == "confirm" and state.offer then
+    local offer = state.offer
+    local name = offer.name
+    if not name or name == "" then
+      name = state.name or "Item"
+    end
+    return string.format("%s x%d · %s", name, offer.count or 0, OnyxiaGold.FormatMoney(offer.buyout or 0))
+  end
+  return nil
+end
+
+function UI:PaintBuyRow(row, action)
+  local button = row.buyButton
+  if button then
+    button:Hide()
+  end
+  if not action or action.kind ~= "BUY_AND_CRAFT" then
+    return
+  end
+  local stop = OnyxiaGold.AuctionStop
+  if not stop or not stop.RowState then
+    return
+  end
+  local state = stop:RowState(action)
+  if not state then
+    return
+  end
+  local text = self:BuyStateText(state)
+  if text and text ~= "" then
+    row.cells.name:SetText(tostring(action.index) .. ". " .. text)
+  end
+  if state.status == "confirm" and button then
+    button:Show()
+  end
+end
+
+function UI:OnActionClick(row)
+  local action = row and row.action
+  if not action or action.kind ~= "BUY_AND_CRAFT" then
+    return
+  end
+  if OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.RequestBuy then
+    OnyxiaGold.AuctionStop:RequestBuy(action)
+  end
+  self:UpdateList()
+end
+
+-- Hardware click. This is the only PlaceAuctionBid in the addon.
+function UI:OnBuyClick(row)
+  local action = row and row.action
+  local stop = OnyxiaGold.AuctionStop
+  if not action or action.kind ~= "BUY_AND_CRAFT" or not stop or not stop.LiveBid then
+    return
+  end
+  if stop.buyActionIndex ~= action.index then
+    return
+  end
+  local bid = stop:LiveBid()
+  if not bid then
+    self:UpdateList()
+    return
+  end
+  if type(PlaceAuctionBid) ~= "function" then
+    return
+  end
+  stop:BeginSettle(bid)
+  PlaceAuctionBid("list", bid.index, bid.buyout)
+  if stop.NoteBidSent then
+    stop:NoteBidSent()
+  end
+  if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
+    OnyxiaGold.Log:Debug("UI", string.format(
+      "PlaceAuctionBid list index=%d buyout=%d count=%d",
+      bid.index, bid.buyout, bid.count
+    ))
+  end
+  self:AcceptHouseConfirm()
+  self:UpdateList()
+end
+
+function UI:AcceptHouseConfirm()
+  local names = {
+    BUYOUT_AUCTION = true,
+    CONFIRM_BUYOUT = true,
+    CONFIRM_AUCTION_BUYOUT = true,
+  }
+  local n = STATICPOPUP_NUMDIALOGS or 4
+  for i = 1, n do
+    local popup = _G["StaticPopup" .. i]
+    if popup and popup.IsShown and popup:IsShown() and names[popup.which] then
+      local button = _G["StaticPopup" .. i .. "Button1"]
+      if button and button.Click then
+        local enabled = true
+        if button.IsEnabled then
+          local flag = button:IsEnabled()
+          enabled = flag == 1 or flag == true
+        end
+        if enabled then
+          pcall(button.Click, button)
+        end
+      end
+      return
+    end
+  end
+end
+
 function UI:UpdateList()
   if not self.rows then
     return
@@ -859,7 +1005,11 @@ function UI:UpdateList()
         row.cells.crafts:SetText(tostring(action.crafts or 0))
       end
       row.cells.type:SetText(action.typeLabel or action.kind or "")
+      self:PaintBuyRow(row, action)
     else
+      if row.buyButton then
+        row.buyButton:Hide()
+      end
       row:Hide()
     end
   end

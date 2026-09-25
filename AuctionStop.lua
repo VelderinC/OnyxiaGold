@@ -6,6 +6,10 @@
   Fills a post price at or above the floor. He presses Blizzard's button.
   Query stops when the visible page is entirely over the stop.
   This view queries one item name, page by page, and only from auction events.
+
+  A buy row runs one live name query. The cheapest listing at or under the
+  stop, whose stack still fits the remaining quantity, is offered from the
+  live page. The UI button is the only PlaceAuctionBid, and it buys one.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -20,6 +24,15 @@ Stop.recipeCount = 1
 Stop.remaining = 0
 Stop.queryName = ""
 Stop.postCopper = nil
+Stop.buyPhase = "idle"
+Stop.buyStatus = nil
+Stop.buyActionIndex = nil
+Stop.offer = nil
+Stop.bought = {}
+Stop.skipIndex = nil
+Stop.skipCount = nil
+Stop.skipBuyout = nil
+Stop.ignoreEmpty = false
 
 local PAGE_CAP = 30
 
@@ -186,6 +199,387 @@ function Stop.JudgePage(rows)
   return { queryNext = false, paging = false }
 end
 
+-- Cheapest live listing at or under the stop whose stack still fits.
+-- rows are already limited to the wanted item. Returns offer, sawUnderStop.
+function Stop.PickListing(rows, stopUnit, remaining)
+  stopUnit = tonumber(stopUnit) or 0
+  remaining = tonumber(remaining) or 0
+  local best
+  local sawUnder = false
+  if type(rows) ~= "table" or remaining < 1 then
+    return nil, false
+  end
+  for i = 1, table.getn(rows) do
+    local row = rows[i]
+    local count = tonumber(row and row.count) or 0
+    local buyout = tonumber(row and row.buyout) or 0
+    local index = tonumber(row and row.index)
+    if index and index >= 1 and count > 0 and buyout > 0 then
+      local unit = math.floor(buyout / count)
+      if unit <= stopUnit then
+        sawUnder = true
+        if count <= remaining then
+          local cheaper = false
+          if not best or unit < best.unit then
+            cheaper = true
+          elseif unit == best.unit and buyout < best.buyout then
+            cheaper = true
+          elseif unit == best.unit and buyout == best.buyout and index < best.index then
+            cheaper = true
+          end
+          if cheaper then
+            best = {
+              index = index,
+              count = count,
+              buyout = buyout,
+              unit = unit,
+              name = (row and row.name) or "",
+              itemID = row and row.itemID,
+            }
+          end
+        end
+      end
+    end
+  end
+  return best, sawUnder
+end
+
+local function boughtKey(itemID, actionIndex)
+  return tostring(actionIndex or "") .. ":" .. tostring(itemID or "")
+end
+
+function Stop:HouseOpen()
+  return AuctionFrame and AuctionFrame.IsShown and AuctionFrame:IsShown() and true or false
+end
+
+function Stop:BuyListening()
+  return self.buyPhase == "search" or self.buyPhase == "settle" or self.buyPhase == "armed"
+end
+
+function Stop:RefreshBuyRow()
+  if OnyxiaGold.UI and OnyxiaGold.UI.UpdateList and OnyxiaGold.UI.rows then
+    OnyxiaGold.UI:UpdateList()
+  end
+end
+
+-- First return only. tonumber() would treat the total as a base.
+local function listSize()
+  if type(GetNumAuctionItems) ~= "function" then
+    return 0
+  end
+  local n = GetNumAuctionItems("list")
+  return tonumber(n) or 0
+end
+
+function Stop:ListReady()
+  if type(GetNumAuctionItems) ~= "function" then
+    return false
+  end
+  local n = listSize()
+  if n < 1 then
+    if self.ignoreEmpty then
+      return false
+    end
+    return true
+  end
+  if type(GetAuctionItemLink) ~= "function" then
+    return false
+  end
+  for i = 1, n do
+    local link = GetAuctionItemLink("list", i)
+    if type(link) ~= "string" or link == "" then
+      return false
+    end
+  end
+  return true
+end
+
+function Stop:ReadLiveRows()
+  local out = {}
+  if type(GetNumAuctionItems) ~= "function" or type(GetAuctionItemInfo) ~= "function" then
+    return out
+  end
+  if type(GetAuctionItemLink) ~= "function" or not OnyxiaGold.ParseItemID then
+    return out
+  end
+  local n = listSize()
+  local want = tonumber(self.itemID)
+  local player = type(UnitName) == "function" and UnitName("player") or nil
+  for i = 1, n do
+    local name, _, count, _, _, _, _, _, buyout, _, _, owner = GetAuctionItemInfo("list", i)
+    local itemID = OnyxiaGold.ParseItemID(GetAuctionItemLink("list", i))
+    if want and itemID == want then
+      local mine = player and type(owner) == "string" and owner ~= "" and owner == player
+      if not mine then
+        table.insert(out, {
+          index = i,
+          name = (type(name) == "string" and name ~= "" and name) or self.queryName or "",
+          count = tonumber(count) or 0,
+          buyout = tonumber(buyout) or 0,
+          itemID = itemID,
+        })
+      end
+    end
+  end
+  return out
+end
+
+function Stop:DropSkipped(rows)
+  local index = self.skipIndex
+  local count = self.skipCount
+  local buyout = self.skipBuyout
+  self.skipIndex = nil
+  self.skipCount = nil
+  self.skipBuyout = nil
+  if not index then
+    return rows
+  end
+  local kept = {}
+  for i = 1, table.getn(rows) do
+    local row = rows[i]
+    if not (row.index == index and row.count == count and row.buyout == buyout) then
+      table.insert(kept, row)
+    end
+  end
+  return kept
+end
+
+function Stop:CapturePageRows()
+  local rows = {}
+  if type(GetNumAuctionItems) ~= "function" or type(GetAuctionItemInfo) ~= "function" then
+    self.pageRows = rows
+    return rows
+  end
+  local n = listSize()
+  for i = 1, n do
+    local _, _, count, _, _, _, minBid, _, buyout, bidAmount = GetAuctionItemInfo("list", i)
+    table.insert(rows, self.Classify({
+      count = tonumber(count) or 1,
+      minBid = tonumber(minBid) or 0,
+      buyout = tonumber(buyout) or 0,
+      bidAmount = tonumber(bidAmount) or 0,
+    }, self.stopUnit or 0, self.recipeCount or 1, self.remaining or 0))
+  end
+  self.pageRows = rows
+  return rows
+end
+
+function Stop:PaintCaptured(rows)
+  if OnyxiaGold.UI and OnyxiaGold.UI.PaintAuctionPage then
+    OnyxiaGold.UI:PaintAuctionPage({ rows = rows })
+  end
+end
+
+function Stop:ReadBuyPage()
+  if not self:HouseOpen() then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "closed"
+    self:RefreshBuyRow()
+    return
+  end
+  if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "busy"
+    self:RefreshBuyRow()
+    return
+  end
+  if (tonumber(self.remaining) or 0) < 1 then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "done"
+    self.skipIndex = nil
+    self.skipCount = nil
+    self.skipBuyout = nil
+    self:RefreshBuyRow()
+    return
+  end
+  local rows = self:ReadLiveRows()
+  if self.buyPhase == "settle" then
+    rows = self:DropSkipped(rows)
+  end
+  local best, sawUnder = self.PickListing(rows, self.stopUnit, self.remaining)
+  self:PaintCaptured(self:CapturePageRows())
+  if best then
+    self.offer = best
+    self.buyPhase = "armed"
+    self.buyStatus = "confirm"
+    if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
+      OnyxiaGold.Log:Debug("AuctionStop", string.format(
+        "buy offer index=%d count=%d buyout=%d unit=%d remaining=%d",
+        best.index, best.count, best.buyout, best.unit, self.remaining or 0
+      ))
+    end
+  else
+    self.offer = nil
+    self.buyPhase = "idle"
+    if sawUnder then
+      self.buyStatus = "large"
+    else
+      self.buyStatus = "none"
+    end
+  end
+  self:RefreshBuyRow()
+end
+
+function Stop:OnBuyList()
+  if not self:BuyListening() then
+    return
+  end
+  local n = listSize()
+  -- A bid refreshes the page. An empty clear in between is not the result.
+  if n < 1 and (self.buyPhase == "settle" or self.buyPhase == "armed") then
+    return
+  end
+  if not self:ListReady() then
+    return
+  end
+  self:ReadBuyPage()
+end
+
+function Stop:RowState(action)
+  if not action or action.kind ~= "BUY_AND_CRAFT" then
+    return nil
+  end
+  if action.index ~= self.buyActionIndex or not self.buyStatus then
+    return nil
+  end
+  return {
+    status = self.buyStatus,
+    name = self.queryName,
+    offer = self.offer,
+  }
+end
+
+function Stop:RequestBuy(action)
+  if not action or action.kind ~= "BUY_AND_CRAFT" then
+    return
+  end
+  self.buyActionIndex = action.index
+  self.offer = nil
+  self.skipIndex = nil
+  self.skipCount = nil
+  self.skipBuyout = nil
+  self.ignoreEmpty = false
+  if not self:HouseOpen() then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "closed"
+    return
+  end
+  if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "busy"
+    return
+  end
+  if not self:Bind(action) then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "none"
+    return
+  end
+  local bought = self.bought[boughtKey(self.itemID, action.index)] or 0
+  self.remaining = (tonumber(self.remaining) or 0) - bought
+  if self.remaining < 1 then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "done"
+    return
+  end
+  if not self.queryName or self.queryName == "" then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "none"
+    return
+  end
+  local canQuery = true
+  if type(CanSendAuctionQuery) == "function" then
+    canQuery = CanSendAuctionQuery() and true or false
+  end
+  if type(QueryAuctionItems) ~= "function" or not canQuery then
+    self.paging = false
+    self.buyPhase = "idle"
+    self.buyStatus = "busy"
+    return
+  end
+  self.paging = false
+  self.page = 0
+  self.buyPhase = "search"
+  self.buyStatus = "search"
+  self.ignoreEmpty = true
+  QueryAuctionItems(self.queryName, nil, nil, nil, nil, nil, 0, nil, nil)
+  self.ignoreEmpty = false
+end
+
+function Stop:LiveBid()
+  local offer = self.offer
+  if not offer or self.buyPhase ~= "armed" then
+    return nil
+  end
+  if not self:HouseOpen() then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "closed"
+    return nil
+  end
+  if type(GetAuctionItemInfo) ~= "function" or type(GetAuctionItemLink) ~= "function" then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "stale"
+    return nil
+  end
+  local name, _, count, _, _, _, _, _, buyout, _, _, owner = GetAuctionItemInfo("list", offer.index)
+  local itemID = OnyxiaGold.ParseItemID(GetAuctionItemLink("list", offer.index))
+  count = tonumber(count) or 0
+  buyout = tonumber(buyout) or 0
+  local player = type(UnitName) == "function" and UnitName("player") or nil
+  local mine = player and type(owner) == "string" and owner ~= "" and owner == player
+  if mine or itemID ~= self.itemID or count ~= offer.count or buyout ~= offer.buyout or count < 1 or buyout < 1 then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "stale"
+    return nil
+  end
+  local unit = math.floor(buyout / count)
+  if unit > (tonumber(self.stopUnit) or 0) or count > (tonumber(self.remaining) or 0) then
+    self.buyPhase = "idle"
+    self.offer = nil
+    self.buyStatus = "none"
+    return nil
+  end
+  if type(name) == "string" and name ~= "" then
+    offer.name = name
+  end
+  return {
+    index = offer.index,
+    buyout = buyout,
+    count = count,
+  }
+end
+
+function Stop:BeginSettle(bid)
+  local count = tonumber(bid and bid.count) or 0
+  local key = boughtKey(self.itemID, self.buyActionIndex)
+  self.bought[key] = (self.bought[key] or 0) + count
+  self.remaining = (tonumber(self.remaining) or 0) - count
+  if self.remaining < 0 then
+    self.remaining = 0
+  end
+  self.skipIndex = bid and bid.index
+  self.skipCount = bid and bid.count
+  self.skipBuyout = bid and bid.buyout
+  self.offer = nil
+  self.buyPhase = "settle"
+  self.buyStatus = "settle"
+  self.ignoreEmpty = true
+end
+
+function Stop:NoteBidSent()
+  self.ignoreEmpty = false
+end
+
 local function queryAllowed()
   if type(CanSendAuctionQuery) ~= "function" then
     return true
@@ -301,6 +695,10 @@ function Stop:SendQuery()
 end
 
 function Stop:OnListUpdate()
+  if self:BuyListening() then
+    self:OnBuyList()
+    return
+  end
   if not self.paging then
     return
   end
@@ -311,22 +709,9 @@ function Stop:OnListUpdate()
     self.paging = false
     return
   end
-  local n = tonumber(GetNumAuctionItems("list")) or 0
-  local rows = {}
-  for i = 1, n do
-    local _, _, count, _, _, _, minBid, _, buyout, bidAmount = GetAuctionItemInfo("list", i)
-    table.insert(rows, self.Classify({
-      count = tonumber(count) or 1,
-      minBid = tonumber(minBid) or 0,
-      buyout = tonumber(buyout) or 0,
-      bidAmount = tonumber(bidAmount) or 0,
-    }, self.stopUnit or 0, self.recipeCount or 1, self.remaining or 0))
-  end
-  self.pageRows = rows
+  local rows = self:CapturePageRows()
   local decision = self.JudgePage(rows)
-  if OnyxiaGold.UI and OnyxiaGold.UI.PaintAuctionPage then
-    OnyxiaGold.UI:PaintAuctionPage({ rows = rows })
-  end
+  self:PaintCaptured(rows)
   if decision.queryNext and (self.page or 0) + 1 < PAGE_CAP then
     self.page = (self.page or 0) + 1
     self.paging = true
@@ -378,5 +763,12 @@ frame:SetScript("OnEvent", function(_, event)
     Stop:OnListUpdate()
   elseif event == "AUCTION_HOUSE_CLOSED" then
     Stop.paging = false
+    Stop.ignoreEmpty = false
+    if Stop.buyActionIndex then
+      Stop.buyPhase = "idle"
+      Stop.offer = nil
+      Stop.buyStatus = "closed"
+      Stop:RefreshBuyRow()
+    end
   end
 end)

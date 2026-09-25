@@ -155,7 +155,8 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Greater Eternal Essence ↔ 3 Lesser Eternal Essence | Item-use; no profession |
 | Greater Planar Essence ↔ 3 Lesser Planar Essence | Item-use; no profession |
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Item-use; no profession |
-| 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Priced only. Not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented |
+| Void Shatter | Enchanting 375, spell 45765. One Void Crystal becomes two Large Prismatic Shards. One craft. Runed Eternium Rod (22463) must be on the character. If selling the crystal leaves more, the row says sell. Abyss Crystal has no shatter line |
+| 3 Small Prismatic Shards → 1 Large, and the reverse | Enchanting 335, spells 28022 and 42615. Runed Fel Iron Rod (22461) must be on the character and the recipe must be known. Not an item click |
 | 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
 | 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. No cooldown. Transmute Master is an EV modifier (1.20x), not a craft gate. Philosopher's Stone (item 9149) must be in bags or equipped. It is not consumed |
 | Earthsiege Diamond | Alchemy 425, spell 57427. Dark Jade, Huge Citrine, Eternal Fire. No cooldown |

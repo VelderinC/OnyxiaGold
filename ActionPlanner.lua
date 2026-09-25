@@ -521,6 +521,10 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     if cooldown and capabilityAllowed > 1 then
       capabilityAllowed = 1
     end
+    local craftCap = tonumber(opp.maxCrafts)
+    if craftCap and craftCap >= 0 and capabilityAllowed > craftCap then
+      capabilityAllowed = craftCap
+    end
   end
 
   local affordableNow = 0
@@ -582,6 +586,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     person.economicProfit = profit
     person.roi = (cash > 0) and (profit / cash) or (ownedValue > 0 and (profit / ownedValue) or 0)
     return true
+  end
+
+  if opp.shatterDecision == "sell" then
+    person.state = "SELL_INSTEAD"
+    person.reason = "Sell"
+    person.capabilityAllowedCrafts = 0
+    person.executableCrafts = 0
+    person.sensibleCrafts = 0
+    return person
   end
 
   if opp.cooldownDecision == "skip" then
@@ -1203,7 +1216,20 @@ function Planner:Refresh()
     if not used[i] then
       local person = self:Personalize(opps[i], remaining, afterMailBudget(remaining))
       people[i] = person
-      if person.opp and person.opp.cooldownDecision == "skip" then
+      if person.opp and person.opp.shatterDecision == "sell" then
+        table.insert(self.actions, {
+          kind = "SELL",
+          name = person.opp.name or "Sell",
+          typeLabel = person.opp.typeLabel or "Enchanting",
+          expectedProfit = person.opp.expectedProfit or 0,
+          cashRequiredNow = 0,
+          crafts = 0,
+          state = "SELL_INSTEAD",
+          detail = person.opp.forgoneLine or "Sell. Shattering leaves less after the cut.",
+          person = person,
+          sourceOpp = person.opp,
+        })
+      elseif person.opp and person.opp.cooldownDecision == "skip" then
         table.insert(self.actions, {
           kind = "SKIP_COOLDOWN",
           name = "Skip 20-hour transmute",

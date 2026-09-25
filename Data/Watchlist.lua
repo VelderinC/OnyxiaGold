@@ -35,6 +35,7 @@ OnyxiaGold.Data.Watchlist = {
   entry("greater_planar_essence", I.GREATER_PLANAR_ESSENCE, "Essence"),
   entry("lesser_cosmic_essence", I.LESSER_COSMIC_ESSENCE, "Essence"),
   entry("greater_cosmic_essence", I.GREATER_COSMIC_ESSENCE, "Essence"),
+  entry("void_crystal", I.VOID_CRYSTAL, "Shard"),
   entry("small_prismatic_shard", I.SMALL_PRISMATIC_SHARD, "Shard"),
   entry("large_prismatic_shard", I.LARGE_PRISMATIC_SHARD, "Shard"),
   entry("small_dream_shard", I.SMALL_DREAM_SHARD, "Shard"),

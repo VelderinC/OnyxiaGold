@@ -27,6 +27,8 @@ Engines\Farming.lua
 CharacterState.lua
 Capital.lua
 Inventory.lua
+AssetClassifier.lua
+FactoryInventory.lua
 Mail.lua
 MailProcessor.lua
 OwnedAuctions.lua

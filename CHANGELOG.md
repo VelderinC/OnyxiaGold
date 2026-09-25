@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 — Bag sort
+
+- A Sort button on the backpack stacks partial stacks, then packs items to the back.
+
 ## 0.1.11 — Profit breakdown
 
 - Each action row shows the depth-walk buy cost, the P25 sale price, and the proceeds after the cut, plus an off-by-default checkbox for Alchemy and Enchanting crafts above current skill.

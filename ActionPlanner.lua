@@ -6,8 +6,10 @@
   ActionPlanner asks whether THIS character can and should do it now.
 
   Greedy on current deployable gold only. Expected sales are never cash.
-  The visible list is one session for the chosen craft: buy the whole lots,
-  then craft, then post. A later sale is not spent on an earlier buy.
+  The visible list is one session. It can hold more than one craft when they
+  do not need the same gold, the same bag slots, the same auction lots, or
+  the same cooldown. Each craft is buy the whole lots, then craft, then post.
+  The top line is the single next step. Expected session profit is the sum.
   Owned bag materials reduce cashRequiredNow but keep economic opportunity cost.
   Post-mail deployable comes from Capital:GetSpendableAfterMail(), which
   reserves against liquid + claimable mail.
@@ -326,25 +328,41 @@ local function craftCost(opp, crafts, owned)
 end
 
 -- slots needed, free slots left. Nil slots means the limit is unknown.
+-- Consumed reagents free their slots before the next craft. Leftover units
+-- from a whole lot keep the slots they still occupy.
 local function bagSlotsFor(lines)
+  local session = OnyxiaGold.SessionState
+  local sessionOn = session and session.IsActive and session:IsActive()
   local inv = OnyxiaGold.Inventory
-  if not inv or not inv.GetFreeGeneralSlots then
-    return nil, nil
+  local free
+  if sessionOn and session.SlotsLeft then
+    free = session:SlotsLeft()
   end
-  local free = inv:GetFreeGeneralSlots()
+  if free == nil and inv and inv.GetFreeGeneralSlots then
+    free = inv:GetFreeGeneralSlots()
+  end
   if free == nil then
     return nil, nil
   end
-  -- Prior actions already consumed their reagents. Do not keep those
-  -- temporary input slots off the free count.
   local slots = 0
   for i = 1, table.getn(lines or {}) do
     local line = lines[i]
-    local stack = inv.GetStackSize and inv:GetStackSize(line.itemID) or nil
+    local stack
+    if sessionOn and session.StackSize then
+      stack = session:StackSize(line.itemID)
+    end
+    if (not stack or stack < 1) and inv and inv.GetStackSize then
+      stack = inv:GetStackSize(line.itemID)
+    end
     if not stack or stack < 1 then
       return nil, free
     end
-    local partial = inv.GetPartialRoom and inv:GetPartialRoom(line.itemID) or 0
+    local partial = 0
+    if sessionOn and session.PartialRoom then
+      partial = session:PartialRoom(line.itemID, stack)
+    elseif inv and inv.GetPartialRoom then
+      partial = inv:GetPartialRoom(line.itemID) or 0
+    end
     local incoming = line.purchasedUnits or line.buyUnits or 0
     local spill = incoming - partial
     if spill < 0 then
@@ -1617,25 +1635,101 @@ local function actionFromStep(step, parent, first)
   return row
 end
 
--- The chosen craft becomes one session. Other crafts stay off the list
--- so the player is not left to sequence them. Previews stay after it.
+local function isSessionCraft(action)
+  local kind = action and action.kind
+  local crafts = tonumber(action and action.crafts) or 0
+  return crafts > 0 and (kind == "BUY_AND_CRAFT" or kind == "CRAFT" or kind == "CRAFT_OWNED")
+end
+
+local function namesFor(action)
+  local names = {
+    output = outputItemName(action),
+    profession = craftProfession(action),
+  }
+  local lines = action.person and action.person.inputLines
+  if type(lines) == "table" then
+    for i = 1, table.getn(lines) do
+      local itemID = tonumber(lines[i] and lines[i].itemID)
+      if itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
+        local name = OnyxiaGold.Data.GetItemName(itemID)
+        if type(name) == "string" and name ~= "" then
+          names[itemID] = name
+        end
+      end
+    end
+  end
+  return names
+end
+
+local function groupFor(action, index)
+  local names = namesFor(action)
+  local steps = {}
+  if OnyxiaGold.SessionPlan and OnyxiaGold.SessionPlan.StepsFromAction then
+    steps = OnyxiaGold.SessionPlan.StepsFromAction(action, names)
+  end
+  local kept = {}
+  for i = 1, table.getn(steps) do
+    local step = steps[i]
+    if step.role ~= "post" or fillSessionPost(action, step) then
+      step.source = action
+      table.insert(kept, step)
+    end
+  end
+  local buys = {}
+  local uses = {}
+  local lines = action.person and action.person.inputLines
+  if type(lines) == "table" then
+    for i = 1, table.getn(lines) do
+      local line = lines[i]
+      local itemID = tonumber(line and line.itemID)
+      if itemID then
+        local purchased = tonumber(line.purchasedUnits) or 0
+        local buyUnits = tonumber(line.buyUnits) or 0
+        local cash = tonumber(line.buyCost) or 0
+        if purchased > 0 or (buyUnits > 0 and cash > 0) then
+          buys[itemID] = true
+        end
+        if (tonumber(line.ownedUnits) or 0) > 0 then
+          uses[itemID] = true
+        end
+      end
+    end
+  end
+  local priority = 0
+  local opp = action.sourceOpp
+  if opp and opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+    priority = 1
+  end
+  local proceeds = 0
+  if type(action.breakdown) == "table" then
+    proceeds = tonumber(action.breakdown.proceeds) or 0
+  end
+  return {
+    index = index,
+    priority = priority,
+    profit = tonumber(action.expectedProfit) or 0,
+    proceeds = proceeds,
+    steps = kept,
+    buys = buys,
+    uses = uses,
+  }
+end
+
+-- Selected crafts become one session. Each keeps buy, then craft, then
+-- post. A later sale is not cash. Previews stay after the session.
 function Planner:OrderSession(deployable)
   local Plan = OnyxiaGold.SessionPlan
   if not Plan or not Plan.Present or not Plan.StepsFromAction then
     return nil
   end
   local actions = self.actions or {}
-  local chosen
+  local groups = {}
   for i = 1, table.getn(actions) do
-    local action = actions[i]
-    local kind = action and action.kind
-    local crafts = tonumber(action and action.crafts) or 0
-    if crafts > 0 and (kind == "BUY_AND_CRAFT" or kind == "CRAFT" or kind == "CRAFT_OWNED") then
-      chosen = action
-      break
+    if isSessionCraft(actions[i]) then
+      table.insert(groups, groupFor(actions[i], i))
     end
   end
-  if not chosen then
+  if table.getn(groups) < 1 then
     local post
     for i = 1, table.getn(actions) do
       local action = actions[i]
@@ -1675,45 +1769,56 @@ function Planner:OrderSession(deployable)
       steps = { post },
     }
   end
-  local names = {
-    output = outputItemName(chosen),
-    profession = craftProfession(chosen),
-  }
-  local lines = chosen.person and chosen.person.inputLines
-  if type(lines) == "table" then
-    for i = 1, table.getn(lines) do
-      local itemID = tonumber(lines[i] and lines[i].itemID)
-      if itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
-        local name = OnyxiaGold.Data.GetItemName(itemID)
-        if type(name) == "string" and name ~= "" then
-          names[itemID] = name
-        end
+  local ordered = groups
+  if Plan.ArrangeCrafts then
+    ordered = Plan.ArrangeCrafts(groups)
+  end
+  local purse = tonumber(deployable) or 0
+  local steps = {}
+  local totalProfit = 0
+  local totalProceeds = 0
+  local included = 0
+  for g = 1, table.getn(ordered) do
+    local group = ordered[g]
+    local need = 0
+    local groupSteps = group.steps or {}
+    for i = 1, table.getn(groupSteps) do
+      local step = groupSteps[i]
+      if step.role == "buy" then
+        need = need + (tonumber(step.cash) or 0)
+      end
+    end
+    if need <= purse and table.getn(groupSteps) > 0 then
+      purse = purse - need
+      included = included + 1
+      totalProfit = totalProfit + (tonumber(group.profit) or 0)
+      totalProceeds = totalProceeds + (tonumber(group.proceeds) or 0)
+      for i = 1, table.getn(groupSteps) do
+        local step = groupSteps[i]
+        step.craft = included
+        table.insert(steps, step)
       end
     end
   end
-  local steps = Plan.StepsFromAction(chosen, names)
-  local kept = {}
-  for i = 1, table.getn(steps) do
-    local step = steps[i]
-    if step.role ~= "post" or fillSessionPost(chosen, step) then
-      table.insert(kept, step)
-    end
-  end
-  local purse = tonumber(deployable) or 0
   local plan = Plan.Present({
-    cash = purse,
-    profit = chosen.expectedProfit or 0,
-    saleProceeds = chosen.breakdown and chosen.breakdown.proceeds or 0,
+    cash = tonumber(deployable) or 0,
+    profit = totalProfit,
+    saleProceeds = totalProceeds,
     auctionOpen = auctionHouseShown(),
-    professionOpen = professionShown(names.profession),
-    steps = kept,
+    professionShown = professionShown,
+    steps = steps,
   })
   if not plan or table.getn(plan.steps or {}) < 1 then
     return nil
   end
   local rows = {}
+  local seen = {}
   for i = 1, table.getn(plan.steps) do
-    table.insert(rows, actionFromStep(plan.steps[i], chosen, i == 1))
+    local step = plan.steps[i]
+    local craft = step.craft or 0
+    local first = not seen[craft]
+    seen[craft] = true
+    table.insert(rows, actionFromStep(step, step.source, first))
   end
   for i = 1, table.getn(actions) do
     local kind = actions[i] and actions[i].kind

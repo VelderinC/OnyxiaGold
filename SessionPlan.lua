@@ -1,11 +1,13 @@
 --[[
   OnyxiaGold.SessionPlan
-  One ordered session for a craft that was already chosen.
+  One ordered session. It can hold more than one craft when they do not
+  need the same gold, the same bag slots, the same auction lots, or the
+  same cooldown.
 
-  The visible order is the real order: buy the whole lots, then craft,
-  then post the output. A later sale is not added to the purse, so it
-  cannot pay for an earlier buy. This file does not choose auction lots.
-  Callers pass cash and quantities from Lots.Select.
+  Each craft stays in its own order: buy the whole lots, then craft, then
+  post. A later sale is not added to the purse, so it cannot pay for a buy.
+  This file does not choose auction lots. Quotes go through SessionState,
+  which calls Lots.Select.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -63,7 +65,7 @@ function Plan.Signed(copper)
   return Plan.Plain(copper)
 end
 
-local function orderSteps(steps)
+local function orderWithin(steps)
   local buy, craft, post = {}, {}, {}
   for i = 1, nitems(steps) do
     local step = steps[i]
@@ -85,6 +87,34 @@ local function orderSteps(steps)
   end
   for i = 1, nitems(post) do
     table.insert(ordered, post[i])
+  end
+  return ordered
+end
+
+-- Steps that share a craft id stay together. Inside one craft the order
+-- is buy, then craft, then post. A missing id is one craft, which is how
+-- a single-craft session was already written.
+local function orderSteps(steps)
+  local groups = {}
+  local order = {}
+  for i = 1, nitems(steps) do
+    local step = steps[i]
+    local key = step and step.craft
+    if key == nil then
+      key = 0
+    end
+    if not groups[key] then
+      groups[key] = {}
+      table.insert(order, key)
+    end
+    table.insert(groups[key], step)
+  end
+  local ordered = {}
+  for g = 1, nitems(order) do
+    local part = orderWithin(groups[order[g]])
+    for i = 1, nitems(part) do
+      table.insert(ordered, part[i])
+    end
   end
   return ordered
 end
@@ -182,7 +212,11 @@ function Plan.WindowHint(step, opts)
     end
   elseif step.role == "craft" then
     local profession = step.profession
-    if opts.professionOpen == false and type(profession) == "string" and profession ~= "" then
+    local open = opts.professionOpen
+    if type(opts.professionShown) == "function" then
+      open = opts.professionShown(profession) and true or false
+    end
+    if open == false and type(profession) == "string" and profession ~= "" then
       return "Open " .. profession .. "."
     end
   end
@@ -281,4 +315,401 @@ function Plan.StepsFromAction(action, names)
     })
   end
   return steps
+end
+
+local function supplies(buyer, user)
+  if not buyer or not user then
+    return false
+  end
+  local buys = buyer.buys or {}
+  local uses = user.uses or {}
+  local userBuys = user.buys or {}
+  for id, on in pairs(uses) do
+    if on and buys[id] and not userBuys[id] then
+      return true
+    end
+  end
+  return false
+end
+
+-- Higher priority first (a 20-hour cast), then higher profit. A craft that
+-- only uses leftovers stays after the craft that buys that listing.
+function Plan.ArrangeCrafts(groups)
+  local sorted = {}
+  for i = 1, nitems(groups) do
+    sorted[i] = groups[i]
+  end
+  table.sort(sorted, function(a, b)
+    local pa = tonumber(a.priority) or 0
+    local pb = tonumber(b.priority) or 0
+    if pa ~= pb then
+      return pa > pb
+    end
+    local fa = tonumber(a.profit) or 0
+    local fb = tonumber(b.profit) or 0
+    if fa ~= fb then
+      return fa > fb
+    end
+    return (tonumber(a.index) or 0) < (tonumber(b.index) or 0)
+  end)
+  local placed = {}
+  local ordered = {}
+  local function place(group, seen)
+    if placed[group] or seen[group] then
+      return
+    end
+    seen[group] = true
+    for i = 1, nitems(sorted) do
+      local other = sorted[i]
+      if other ~= group and supplies(other, group) then
+        place(other, seen)
+      end
+    end
+    placed[group] = true
+    table.insert(ordered, group)
+  end
+  for i = 1, nitems(sorted) do
+    place(sorted[i], {})
+  end
+  return ordered
+end
+
+local function copyBook(book)
+  local levels = {}
+  local source = book and book.levels or {}
+  for i = 1, nitems(source) do
+    local lvl = source[i]
+    if lvl then
+      levels[i] = {
+        p = lvl.p,
+        q = lvl.q,
+        n = lvl.n,
+        s = lvl.s,
+      }
+    end
+  end
+  return { levels = levels, covered = book and book.covered or 0 }
+end
+
+local function basisCost(session, itemID, units)
+  units = tonumber(units) or 0
+  itemID = tonumber(itemID)
+  if not itemID or units <= 0 then
+    return 0
+  end
+  local have = session:GetBagCount(itemID)
+  local basis = session.basis and session.basis[itemID] or 0
+  if have <= 0 or basis <= 0 then
+    return 0
+  end
+  if units > have then
+    units = have
+  end
+  return math.floor(basis * units / have)
+end
+
+-- Price n crafts against the session without reserving. Nil when the lots,
+-- the purse, or the bag slots cannot cover it. Marginal profit is the
+-- caller's concern; this returns the economic profit of exactly n crafts.
+local function priceCraft(session, candidate, crafts)
+  local reagents = candidate.reagents or {}
+  local net = tonumber(candidate.net) or 0
+  local lines = {}
+  local cash = 0
+  local economic = 0
+  local slotNeed = 0
+  for i = 1, nitems(reagents) do
+    local row = reagents[i]
+    local itemID = tonumber(row.itemID)
+    local count = tonumber(row.count) or 1
+    if count < 1 then
+      count = 1
+    end
+    if not itemID then
+      return nil
+    end
+    local need = crafts * count
+    local owned = session:GetBagCount(itemID)
+    if owned > need then
+      owned = need
+    end
+    if owned < 0 then
+      owned = 0
+    end
+    local toBuy = need - owned
+    local quote
+    if toBuy > 0 then
+      quote = session:Quote(itemID, toBuy)
+      if not quote or not quote.complete then
+        return nil
+      end
+    else
+      quote = {
+        complete = true,
+        cashRequired = 0,
+        economicConsumedCost = 0,
+        purchasedUnits = 0,
+        consumedUnits = 0,
+        excessUnits = 0,
+        leftoverAssetValue = 0,
+      }
+    end
+    local bought = tonumber(quote.purchasedUnits) or 0
+    if bought > 0 and session.freeSlots ~= nil then
+      local stack = session:StackSize(itemID)
+      if stack and stack > 0 then
+        local partial = session:PartialRoom(itemID, stack)
+        local spill = bought - partial
+        if spill < 0 then
+          spill = 0
+        end
+        slotNeed = slotNeed + math.floor((spill + stack - 1) / stack)
+      end
+    end
+    cash = cash + (tonumber(quote.cashRequired) or 0)
+    economic = economic + (tonumber(quote.economicConsumedCost) or 0)
+    economic = economic + basisCost(session, itemID, owned)
+    table.insert(lines, {
+      itemID = itemID,
+      name = row.name,
+      ownedUnits = owned,
+      buyUnits = toBuy,
+      buyCost = tonumber(quote.cashRequired) or 0,
+      purchasedUnits = bought,
+      excessUnits = tonumber(quote.excessUnits) or 0,
+      leftoverAssetValue = tonumber(quote.leftoverAssetValue) or 0,
+    })
+  end
+  if cash > (session:RemainingCash() or 0) then
+    return nil
+  end
+  local left = session:SlotsLeft()
+  if left ~= nil and slotNeed > left then
+    return nil
+  end
+  return {
+    crafts = crafts,
+    cash = cash,
+    economic = economic,
+    profit = crafts * net - economic,
+    lines = lines,
+  }
+end
+
+local function stepsForCraft(candidate, priced, craftId)
+  local steps = {}
+  local lines = priced.lines or {}
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local purchased = tonumber(line.purchasedUnits) or 0
+    local buyUnits = tonumber(line.buyUnits) or 0
+    local cash = tonumber(line.buyCost) or 0
+    if purchased > 0 and (buyUnits > 0 or cash > 0) then
+      table.insert(steps, {
+        role = "buy",
+        craft = craftId,
+        itemID = line.itemID,
+        count = purchased,
+        cash = cash,
+        name = line.name or "item",
+        excessUnits = tonumber(line.excessUnits) or 0,
+      })
+    end
+  end
+  local crafts = tonumber(priced.crafts) or 0
+  local net = tonumber(candidate.net) or 0
+  local proceeds = crafts * net
+  if crafts > 0 then
+    table.insert(steps, {
+      role = "craft",
+      craft = craftId,
+      count = crafts,
+      name = candidate.output or candidate.name or "item",
+      profession = candidate.profession,
+      proceeds = proceeds,
+    })
+  end
+  local per = tonumber(candidate.outputCount) or 1
+  if per < 1 then
+    per = 1
+  end
+  local postUnits = crafts * per
+  if candidate.post == false then
+    postUnits = 0
+  end
+  if postUnits > 0 then
+    table.insert(steps, {
+      role = "post",
+      craft = craftId,
+      count = postUnits,
+      name = candidate.output or candidate.name or "item",
+      cash = 0,
+      itemID = tonumber(candidate.outputItemID),
+      proceeds = proceeds,
+    })
+  end
+  return steps
+end
+
+-- candidates are crafts this character can already perform. profit is the
+-- sort key. net is one craft's sale after the cut and is never purse cash.
+-- resources.depth is the covered buyout book. Two crafts are both kept when
+-- their gold, bag slots, listings, and cooldown do not collide. A craft is
+-- kept only while its own marginal profit stays positive.
+function Plan.Portfolio(candidates, resources)
+  resources = resources or {}
+  local Session = OnyxiaGold.SessionState
+  if not Session or not Session.Begin then
+    return nil
+  end
+  local cash = tonumber(resources.cash) or 0
+  if cash < 0 then
+    cash = 0
+  end
+  Session:Begin(cash, cash)
+  Session.bags = {}
+  Session.basis = {}
+  Session.depth = {}
+  Session.stackSizes = {}
+  Session.heldSlots = 0
+  if resources.freeSlots == nil then
+    Session.freeSlots = nil
+  else
+    Session.freeSlots = tonumber(resources.freeSlots) or 0
+  end
+  local bags = resources.bags or {}
+  for itemID, count in pairs(bags) do
+    local id = tonumber(itemID)
+    local n = tonumber(count) or 0
+    if id and n > 0 then
+      Session.bags[id] = n
+    end
+  end
+  local basis = resources.basis or {}
+  for itemID, value in pairs(basis) do
+    local id = tonumber(itemID)
+    local n = tonumber(value) or 0
+    if id and n > 0 then
+      Session.basis[id] = n
+    end
+  end
+  local depth = resources.depth or {}
+  for itemID, book in pairs(depth) do
+    local id = tonumber(itemID)
+    if id and type(book) == "table" then
+      Session.depth[id] = copyBook(book)
+    end
+  end
+  local stacks = resources.stackSize or {}
+  for itemID, size in pairs(stacks) do
+    local id = tonumber(itemID)
+    local n = tonumber(size) or 0
+    if id and n > 0 then
+      Session.stackSizes[id] = n
+    end
+  end
+  local used = resources.cooldowns or {}
+  for group, on in pairs(used) do
+    if on then
+      Session.cooldowns[group] = true
+    end
+  end
+
+  local indexed = {}
+  for i = 1, nitems(candidates) do
+    local row = candidates[i]
+    if type(row) == "table" then
+      table.insert(indexed, { row = row, index = i })
+    end
+  end
+  table.sort(indexed, function(a, b)
+    local pa = tonumber(a.row.profit) or 0
+    local pb = tonumber(b.row.profit) or 0
+    if pa ~= pb then
+      return pa > pb
+    end
+    return a.index < b.index
+  end)
+
+  local steps = {}
+  local accepted = {}
+  local profit = 0
+  local proceeds = 0
+  for i = 1, nitems(indexed) do
+    local candidate = indexed[i].row
+    local cooldown = candidate.cooldown
+    local blocked = cooldown and Session:CooldownUsed(cooldown)
+    local sortProfit = tonumber(candidate.profit) or 0
+    if not blocked and sortProfit > 0 then
+      local maxCrafts = tonumber(candidate.crafts) or 1
+      if maxCrafts < 1 then
+        maxCrafts = 1
+      end
+      local kept
+      local previous = 0
+      local n = 1
+      while n <= maxCrafts do
+        local priced = priceCraft(Session, candidate, n)
+        if not priced then
+          break
+        end
+        local marginal = priced.profit - previous
+        if marginal <= 0 then
+          break
+        end
+        kept = priced
+        previous = priced.profit
+        n = n + 1
+      end
+      if kept and kept.profit > 0 then
+        local ownedCosts = {}
+        for lineIndex = 1, nitems(kept.lines) do
+          local line = kept.lines[lineIndex]
+          ownedCosts[lineIndex] = basisCost(Session, line.itemID, line.ownedUnits)
+        end
+        local reserved = Session:Reserve({
+          cash = kept.cash,
+          inputs = kept.lines,
+          cooldown = cooldown,
+        })
+        if reserved then
+          for lineIndex = 1, nitems(kept.lines) do
+            local line = kept.lines[lineIndex]
+            local id = line.itemID
+            local left = (Session.basis[id] or 0) - (ownedCosts[lineIndex] or 0)
+            left = left + (tonumber(line.leftoverAssetValue) or 0)
+            if left < 0 then
+              left = 0
+            end
+            if id then
+              Session.basis[id] = left
+            end
+          end
+          local craftId = nitems(accepted) + 1
+          local crafted = stepsForCraft(candidate, kept, craftId)
+          for stepIndex = 1, nitems(crafted) do
+            table.insert(steps, crafted[stepIndex])
+          end
+          table.insert(accepted, {
+            name = candidate.output or candidate.name,
+            profit = kept.profit,
+            crafts = kept.crafts,
+          })
+          profit = profit + kept.profit
+          proceeds = proceeds + (kept.crafts * (tonumber(candidate.net) or 0))
+        end
+      end
+    end
+  end
+
+  local plan = Plan.Present({
+    cash = cash,
+    profit = profit,
+    saleProceeds = proceeds,
+    auctionOpen = resources.auctionOpen,
+    professionOpen = resources.professionOpen,
+    steps = steps,
+  })
+  plan.crafts = accepted
+  return plan
 end

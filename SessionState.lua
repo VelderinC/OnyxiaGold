@@ -13,8 +13,10 @@
   a thinner visible book. That count is not a sale rate.
   Bank stock is not treated as bag stock. Cooldown groups are marked used
   for this plan only; no timing numbers are invented.
-  Temporary purchase slots are not added to later actions. Peak occupancy
-  for the action is recorded on bagPeak.
+  A purchase slot is freed when that same action crafts the reagent away.
+  Leftover units from a whole lot keep the slots they still occupy, so the
+  next action cannot use those slots. Peak occupancy for the action is
+  recorded on bagPeak.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -35,6 +37,10 @@ function Session:Reset()
   self.outputUsed = {}
   self.bagSlotsUsed = 0
   self.bagPeak = 0
+  self.heldSlots = 0
+  self.freeSlots = nil
+  self.stackSizes = {}
+  self.basis = {}
 end
 
 Session:Reset()
@@ -78,6 +84,10 @@ function Session:Begin(deployable, afterMailDeployable)
     self.baseAfterMail = 0
   end
   self.bags = copyBagSnapshot()
+  local inv = OnyxiaGold.Inventory
+  if inv and inv.GetFreeGeneralSlots then
+    self.freeSlots = inv:GetFreeGeneralSlots()
+  end
   return self
 end
 
@@ -176,20 +186,91 @@ function Session:CooldownUsed(group)
   return self.cooldowns[group] and true or false
 end
 
-function Session:QuoteBook(book, quantity, capital)
+function Session:StackSize(itemID)
+  itemID = tonumber(itemID)
+  if self.stackSizes and itemID and self.stackSizes[itemID] then
+    local stored = tonumber(self.stackSizes[itemID])
+    if stored and stored > 0 then
+      return stored
+    end
+  end
+  local inv = OnyxiaGold.Inventory
+  if inv and inv.GetStackSize then
+    return inv:GetStackSize(itemID)
+  end
+  return nil
+end
+
+-- Room left in a stack already in the virtual bags. Nil stack means unknown.
+function Session:PartialRoom(itemID, stack)
+  stack = tonumber(stack)
+  if not stack or stack < 1 then
+    return 0
+  end
+  local have = self:GetBagCount(itemID)
+  if have <= 0 then
+    return 0
+  end
+  local rem = have % stack
+  if rem == 0 then
+    return 0
+  end
+  return stack - rem
+end
+
+-- Nil means the bag limit is unknown and must not cut a buy.
+function Session:SlotsLeft()
+  if self.freeSlots == nil then
+    return nil
+  end
+  local left = (tonumber(self.freeSlots) or 0) - (tonumber(self.heldSlots) or 0)
+  if left < 0 then
+    left = 0
+  end
+  return left
+end
+
+local function stacksOccupied(units, stack)
+  units = tonumber(units) or 0
+  stack = tonumber(stack)
+  if not stack or stack < 1 or units <= 0 then
+    return 0
+  end
+  return math.floor((units + stack - 1) / stack)
+end
+
+function Session:BuyConstraints(itemID, capital)
+  local constraints = {}
+  if capital ~= nil then
+    constraints.capital = capital
+  end
+  local left = self:SlotsLeft()
+  if left ~= nil then
+    constraints.freeSlots = left
+  else
+    local inv = OnyxiaGold.Inventory
+    if inv and inv.GetFreeGeneralSlots then
+      local free = inv:GetFreeGeneralSlots()
+      if free ~= nil then
+        constraints.freeSlots = free
+      end
+    end
+  end
+  local stack = self:StackSize(itemID)
+  if stack then
+    constraints.stackSize = stack
+    constraints.partialRoom = self:PartialRoom(itemID, stack)
+  end
+  return constraints
+end
+
+function Session:QuoteBook(book, quantity, capital, itemID)
   quantity = math.floor(tonumber(quantity) or 0)
   book = book or { levels = {}, covered = 0 }
   if capital == nil then
     capital = self.cash
   end
-  local constraints = { capital = capital }
-  local inv = OnyxiaGold.Inventory
-  if inv and inv.GetFreeGeneralSlots then
-    local free = inv:GetFreeGeneralSlots()
-    if free ~= nil then
-      constraints.freeSlots = free
-    end
-  end
+  local constraints = self:BuyConstraints(itemID, capital)
   local quote
   if OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
     quote = OnyxiaGold.Lots.Quote(book.levels, quantity, constraints)
@@ -213,7 +294,7 @@ function Session:QuoteBook(book, quantity, capital)
 end
 
 function Session:Quote(itemID, quantity, capital)
-  return self:QuoteBook(self:EnsureDepth(itemID), quantity, capital)
+  return self:QuoteBook(self:EnsureDepth(itemID), quantity, capital, itemID)
 end
 
 function Session:AcquisitionCost(itemID, quantity)
@@ -315,8 +396,10 @@ function Session:Reserve(spec)
   local lines = reservationLines(spec)
   local normalized = {}
   local scratch = {}
+  local beforeBags = {}
   local bags = {}
   for itemID, count in pairs(self.bags or {}) do
+    beforeBags[itemID] = count
     bags[itemID] = count
   end
   local leftCash = self.cash
@@ -349,7 +432,7 @@ function Session:Reserve(spec)
         book = copyBook(self:EnsureDepth(itemID))
         scratch[itemID] = book
       end
-      local quote = self:QuoteBook(book, buyUnits, leftCash)
+      local quote = self:QuoteBook(book, buyUnits, leftCash, itemID)
       if not quote.complete then
         return false
       end
@@ -382,11 +465,53 @@ function Session:Reserve(spec)
   if buyCount > 0 and cash ~= quotedCash then
     return false
   end
+  if self.freeSlots ~= nil then
+    local needSlots = 0
+    local known = true
+    for i = 1, table.getn(normalized) do
+      local line = normalized[i]
+      local bought = tonumber(line.purchasedUnits) or 0
+      if bought > 0 then
+        local stack = self:StackSize(line.itemID)
+        if not stack or stack < 1 then
+          known = false
+          break
+        end
+        local partial = self:PartialRoom(line.itemID, stack)
+        local spill = bought - partial
+        if spill < 0 then
+          spill = 0
+        end
+        needSlots = needSlots + math.floor((spill + stack - 1) / stack)
+      end
+    end
+    local left = self:SlotsLeft() or 0
+    if known and needSlots > left then
+      return false
+    end
+  end
 
   for itemID, book in pairs(scratch) do
     self.depth[itemID] = book
   end
   self.bags = bags
+  if self.freeSlots ~= nil then
+    local seen = {}
+    for itemID in pairs(beforeBags) do
+      seen[itemID] = true
+    end
+    for itemID in pairs(bags) do
+      seen[itemID] = true
+    end
+    for itemID in pairs(seen) do
+      local stack = self:StackSize(itemID)
+      if stack and stack > 0 then
+        local oldSlots = stacksOccupied(beforeBags[itemID], stack)
+        local newSlots = stacksOccupied(bags[itemID], stack)
+        self.heldSlots = (self.heldSlots or 0) + (newSlots - oldSlots)
+      end
+    end
+  end
   self.cash = self.cash - cash
   self.spent = self.spent + cash
   local itemID = normalized[1] and normalized[1].itemID or nil

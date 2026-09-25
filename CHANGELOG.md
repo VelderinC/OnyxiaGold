@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.10 — Click to buy
+
+- A buy row searches the live auction page, then one click buys one listing at or under the stop.
+
 ## 0.1.9 — Readable window and auction button
 
 - Solid dark window, wider columns that no longer collide, and an OnyxiaGold button on the auction house title bar.

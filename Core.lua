@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.12"
+OnyxiaGold.Version = "0.1.13"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -26,6 +26,8 @@ OnyxiaGold.Config = {
   MaxHistoryPoints = 30,
   MaxScanSummaries = 20,
   MaxLogLines = 800,
+  -- Per-character trade lines kept in OnyxiaGoldDB. Older lines drop first.
+  MaxTradeLines = 400,
   -- Persisted acquisition book only. Percentiles use the full runtime book
   -- before this cap; depthCoveredQuantity records how much the cap kept.
   MaxDepthLevelsPerItem = 100,

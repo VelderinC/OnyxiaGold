@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.13 — Personal trade history
+
+- Record each character's buys, sales, and auction-house mail proceeds, and show them as copyable text with spent and received totals.
+
 ## 0.1.12 — Bag sort
 
 - A Sort button on the backpack stacks partial stacks, then packs items to the back.

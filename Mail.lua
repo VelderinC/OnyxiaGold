@@ -131,6 +131,11 @@ function Mail:ScanInbox()
     "Inbox claimable=%d pending=%d visible=%d total=%d complete=%s",
     claimable, pending, numItems, totalItems, tostring(complete)
   ))
+
+  -- Read sale proceeds off success mail. Do not take or delete anything.
+  if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.NoteInbox then
+    OnyxiaGold.TradeLog:NoteInbox()
+  end
 end
 
 function Mail:IsSnapshotComplete()

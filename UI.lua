@@ -9,17 +9,17 @@ OnyxiaGold.UI = OnyxiaGold.UI or {}
 
 local UI = OnyxiaGold.UI
 
-local FRAME_WIDTH = 920
-local FRAME_HEIGHT = 640
-local NUM_ROWS = 10
-local ROW_HEIGHT = 36
+local FRAME_WIDTH = 1080
+local FRAME_HEIGHT = 760
+local NUM_ROWS = 8
+local ROW_HEIGHT = 58
 local HEADER_Y = -188
 local LIST_TOP = HEADER_Y - 28
 local COL_GAP = 16
 
 local COLS = {
-  { key = "name", label = "What to do now", width = 400, justify = "LEFT" },
-  { key = "profit", label = "EV", width = 112, justify = "RIGHT" },
+  { key = "name", label = "What to do now", width = 560, justify = "LEFT" },
+  { key = "profit", label = "Profit", width = 112, justify = "RIGHT" },
   { key = "cash", label = "Cash", width = 124, justify = "RIGHT" },
   { key = "crafts", label = "Qty", width = 52, justify = "RIGHT" },
   { key = "type", label = "Type", width = 92, justify = "LEFT" },
@@ -69,10 +69,134 @@ local function actionInstruction(action)
   return string.format("%s, convert into %d %s, then post %s.", buy, units, outName, pronoun)
 end
 
+local function formatCount(n)
+  n = tonumber(n) or 0
+  local nearest = math.floor(n + 0.5)
+  if math.abs(n - nearest) < 0.001 then
+    return tostring(nearest)
+  end
+  return string.format("%.2f", n)
+end
+
+-- Plain gold text. Keeps copper when it is part of the price.
+local function formatPlainCash(copper)
+  copper = tonumber(copper) or 0
+  local negative = copper < 0
+  if negative then
+    copper = -copper
+  end
+  copper = math.floor(copper + 0.5)
+  local g = math.floor(copper / 10000)
+  local s = math.floor((copper % 10000) / 100)
+  local c = copper % 100
+  local text
+  if g > 0 and s > 0 and c > 0 then
+    text = string.format("%dg %ds %dc", g, s, c)
+  elseif g > 0 and s > 0 then
+    text = string.format("%dg %ds", g, s)
+  elseif g > 0 and c > 0 then
+    text = string.format("%dg %dc", g, c)
+  elseif g > 0 then
+    text = string.format("%dg", g)
+  elseif s > 0 and c > 0 then
+    text = string.format("%ds %dc", s, c)
+  elseif s > 0 then
+    text = string.format("%ds", s)
+  else
+    text = string.format("%dc", c)
+  end
+  if negative then
+    return "-" .. text
+  end
+  return text
+end
+
+local function profitBreakdownText(action)
+  local info = action and action.breakdown
+  if type(info) ~= "table" then
+    return nil
+  end
+  local sentences = {}
+  local buys = info.buys or {}
+  if table.getn(buys) > 0 then
+    local bits = {}
+    for i = 1, table.getn(buys) do
+      local row = buys[i]
+      local cost = tonumber(row.cost)
+      if cost then
+        table.insert(bits, string.format(
+          "%s %s for %s",
+          formatCount(row.count),
+          itemName(row.itemID),
+          formatPlainCash(cost)
+        ))
+      end
+    end
+    if table.getn(bits) > 0 then
+      table.insert(sentences, "Buy " .. table.concat(bits, " and "))
+    end
+  end
+  local saleUnit = tonumber(info.saleUnit)
+  local units = tonumber(info.postUnits)
+  if info.outputItemID and saleUnit and saleUnit > 0 and units and units > 0 then
+    local cut = "5%"
+    if OnyxiaGold.GetAuctionHouseCut and OnyxiaGold.FormatPercent then
+      cut = OnyxiaGold.FormatPercent(OnyxiaGold:GetAuctionHouseCut())
+    end
+    table.insert(sentences, string.format(
+      "Expect to post %s %s at %s each, %s after the %s cut",
+      formatCount(units),
+      itemName(info.outputItemID),
+      formatPlainCash(saleUnit),
+      formatPlainCash(info.proceeds or 0),
+      cut
+    ))
+  end
+  if table.getn(sentences) == 0 then
+    return nil
+  end
+  return table.concat(sentences, ". ") .. "."
+end
+
+local function rowTitle(action)
+  if not action then
+    return ""
+  end
+  local parts = {}
+  if action.kind == "SKILL_PREVIEW" and action.skillLabel and action.skillLabel ~= "" then
+    table.insert(parts, action.skillLabel)
+  else
+    local instruction = actionInstruction(action)
+    if instruction and instruction ~= "" then
+      table.insert(parts, instruction)
+    end
+  end
+  local breakdown = profitBreakdownText(action)
+  if breakdown and breakdown ~= "" then
+    table.insert(parts, breakdown)
+  end
+  if table.getn(parts) == 0 then
+    return action.name or ""
+  end
+  return table.concat(parts, " ")
+end
+
 local function setRGB(fs, r, g, b)
   if fs and fs.SetTextColor then
     fs:SetTextColor(r, g, b)
   end
+end
+
+local function paintTone(row, preview)
+  local r, g, b = 1, 1, 1
+  if preview then
+    r, g, b = 0.55, 0.55, 0.55
+  end
+  setRGB(row.cells.name, r, g, b)
+  setRGB(row.cells.profit, r, g, b)
+  setRGB(row.cells.cash, r, g, b)
+  setRGB(row.cells.crafts, r, g, b)
+  setRGB(row.cells.type, r, g, b)
 end
 
 local function skillBit(cap, name)
@@ -223,6 +347,29 @@ function UI:Create()
     OnyxiaGold.OpportunityEngine:Refresh()
   end)
 
+  local skillPreview = CreateFrame("CheckButton", "OnyxiaGoldSkillPreviewCheck", frame, "UICheckButtonTemplate")
+  skillPreview:SetWidth(24)
+  skillPreview:SetHeight(24)
+  if masterText then
+    skillPreview:SetPoint("LEFT", masterText, "RIGHT", 18, 0)
+  else
+    skillPreview:SetPoint("LEFT", master, "RIGHT", 88, 0)
+  end
+  local skillText = getglobal("OnyxiaGoldSkillPreviewCheckText")
+  if skillText then
+    skillText:SetText("Show above my skill")
+  end
+  skillPreview:SetScript("OnClick", function(self)
+    OnyxiaGold.Database:Ensure()
+    local on = self:GetChecked() and true or false
+    OnyxiaGoldDB.settings.showAboveSkill = on
+    OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
+    end
+    OnyxiaGold.UI:Refresh()
+  end)
+
   local identity = addLabel(frame, "", "GameFontHighlightSmall")
   identity:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -72)
   identity:SetJustifyH("LEFT")
@@ -364,6 +511,7 @@ function UI:Create()
       fs:SetText("")
       if col.key == "name" then
         fs:SetHeight(ROW_HEIGHT - 6)
+        fs:SetJustifyV("TOP")
         fs:SetWordWrap(true)
         fs:SetNonSpaceWrap(false)
       else
@@ -432,6 +580,7 @@ function UI:Create()
   self.scanButton = quickBtn
   self.refreshButton = refreshBtn
   self.masterCheck = master
+  self.skillCheck = skillPreview
   self.identityLabel = identity
   self.professionLabel = professions
   self.factoryLabel = factory
@@ -624,7 +773,9 @@ function UI:ShowActionTooltip(row)
         .. " — " .. opp.confidenceNotes, 0.7, 0.7, 0.7, 1)
     end
   end
-  if action.kind == "COLLECT_MAIL" then
+  if action.kind == "SKILL_PREVIEW" then
+    GameTooltip:AddLine((action.skillLabel or "Above your skill") .. " Not a buy.", 1, 0.82, 0.4, 1)
+  elseif action.kind == "COLLECT_MAIL" then
     GameTooltip:AddLine("Visit a mailbox and collect gold. The addon will not loot mail.", 1, 0.85, 0.4, 1)
   elseif action.kind == "BUY_AND_CRAFT" then
     GameTooltip:AddLine("Click the row to search the Auction House. Buy purchases one listing at or under the stop.", 1, 0.85, 0.4, 1)
@@ -989,8 +1140,9 @@ function UI:UpdateList()
     row.opp = action and action.sourceOpp or nil
     if action then
       row:Show()
-      local label = tostring(offset + i) .. ". " .. actionInstruction(action)
+      local label = tostring(offset + i) .. ". " .. rowTitle(action)
       row.cells.name:SetText(label)
+      paintTone(row, action.kind == "SKILL_PREVIEW")
       if action.kind == "COLLECT_MAIL" then
         row.cells.profit:SetText("")
         local ready = OnyxiaGold.FormatGoldShort(action.claimable or 0)
@@ -1005,11 +1157,15 @@ function UI:UpdateList()
         row.cells.crafts:SetText(tostring(action.crafts or 0))
       end
       row.cells.type:SetText(action.typeLabel or action.kind or "")
+      if action.kind == "SKILL_PREVIEW" and row.buyButton then
+        row.buyButton:Hide()
+      end
       self:PaintBuyRow(row, action)
     else
       if row.buyButton then
         row.buyButton:Hide()
       end
+      paintTone(row, false)
       row:Hide()
     end
   end
@@ -1026,6 +1182,14 @@ function UI:Refresh()
       self.masterCheck:SetChecked(0)
     end
   end
+  if self.skillCheck then
+    local on = OnyxiaGoldDB and OnyxiaGoldDB.settings and OnyxiaGoldDB.settings.showAboveSkill
+    if on then
+      self.skillCheck:SetChecked(1)
+    else
+      self.skillCheck:SetChecked(0)
+    end
+  end
 
   self:RefreshHeader()
 
@@ -1033,13 +1197,21 @@ function UI:Refresh()
   if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetActions then
     actions = OnyxiaGold.ActionPlanner:GetActions()
   end
-  local n = table.getn(actions)
+  local real = 0
+  local preview = 0
+  for i = 1, table.getn(actions) do
+    if actions[i].kind == "SKILL_PREVIEW" then
+      preview = preview + 1
+    else
+      real = real + 1
+    end
+  end
 
   if OnyxiaGold.Scanner:IsScanning() then
     -- Scanner owns the status line while a scan is in progress.
   else
     local hint = OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner:UnknownRecipeHint()
-    if n == 0 then
+    if real == 0 and preview == 0 then
       local market = OnyxiaGold.Database:GetMarket()
       if not market or not market.latest or not next(market.latest) then
         self:SetStatus("No price data yet. Open the Auction House and click Quick Scan.")
@@ -1050,7 +1222,14 @@ function UI:Refresh()
       end
     else
       local extra = hint and ("  " .. hint) or ""
-      self:SetStatus(tostring(n) .. " personal actions from current capital." .. extra)
+      if preview > 0 then
+        extra = extra .. "  " .. tostring(preview) .. " above your skill."
+      end
+      if real == 0 then
+        self:SetStatus(tostring(preview) .. " above your skill." .. (hint and ("  " .. hint) or ""))
+      else
+        self:SetStatus(tostring(real) .. " personal actions from current capital." .. extra)
+      end
     end
   end
 

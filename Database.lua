@@ -45,6 +45,7 @@ function DB:DefaultSettings()
     auctionHouseCut = nil,
     useGetAll = false,
     capitalReservePercent = 0.10,
+    showAboveSkill = false,
   }
 end
 

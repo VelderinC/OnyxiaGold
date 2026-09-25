@@ -68,6 +68,28 @@ local Items = {
   EYE_OF_ZUL = { id = 36934, name = "Eye of Zul" },
   SCARLET_RUBY = { id = 36918, name = "Scarlet Ruby" },
   CARDINAL_RUBY = { id = 36919, name = "Cardinal Ruby" },
+  ETERNAL_WATER = { id = 35622, name = "Eternal Water" },
+  ETERNAL_EARTH = { id = 35624, name = "Eternal Earth" },
+
+  -- Old 20-hour alchemy cycle. Prices come from the scan, not from this file.
+  ESSENCE_OF_AIR = { id = 7082, name = "Essence of Air" },
+  ESSENCE_OF_EARTH = { id = 7076, name = "Essence of Earth" },
+  ESSENCE_OF_FIRE = { id = 7078, name = "Essence of Fire" },
+  ESSENCE_OF_WATER = { id = 7080, name = "Essence of Water" },
+  ESSENCE_OF_UNDEATH = { id = 12808, name = "Essence of Undeath" },
+  LIVING_ESSENCE = { id = 12803, name = "Living Essence" },
+  IRON_BAR = { id = 3575, name = "Iron Bar" },
+  GOLD_BAR = { id = 3577, name = "Gold Bar" },
+  MITHRIL_BAR = { id = 3860, name = "Mithril Bar" },
+  TRUESILVER_BAR = { id = 6037, name = "Truesilver Bar" },
+  PRIMAL_AIR = { id = 22451, name = "Primal Air" },
+  PRIMAL_EARTH = { id = 22452, name = "Primal Earth" },
+  PRIMAL_FIRE = { id = 21884, name = "Primal Fire" },
+  PRIMAL_WATER = { id = 21885, name = "Primal Water" },
+  PRIMAL_SHADOW = { id = 22456, name = "Primal Shadow" },
+  PRIMAL_MANA = { id = 22457, name = "Primal Mana" },
+  PRIMAL_LIFE = { id = 21886, name = "Primal Life" },
+  ETERNAL_MIGHT = { id = 40248, name = "Eternal Might" },
 
   -- Upcoming economic materials (watchlist / later engines)
   NETHERWEAVE_CLOTH = { id = 21877, name = "Netherweave Cloth" },

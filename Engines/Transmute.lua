@@ -34,13 +34,48 @@ local function copyInputs(raw)
   return inputs, ids
 end
 
-function Transmute:Evaluate(def)
+local COOLDOWN_GROUP = "transmute_20h"
+
+local function cooldownOf(def)
+  local req = def and def.requirements
+  return req and req.cooldown or nil
+end
+
+-- unset: skill is not a number we may use.
+-- unknown: profession scan has not happened.
+-- locked: skill, profession, or recipe blocks the cast.
+-- ready: this character can perform it.
+function Transmute:RecipeGate(def)
+  if not def or def.skillUnset or (def.requirements and def.requirements.skillUnset) then
+    return "unset"
+  end
+  if not def.requirements then
+    return "unset"
+  end
+  local capApi = OnyxiaGold.Capabilities
+  if not capApi or not capApi.CanExecute then
+    return "locked"
+  end
+  local cap = capApi:CanExecute(def.requirements)
+  if cap and cap.executable then
+    return "ready"
+  end
+  if cap and cap.skillUnset then
+    return "unset"
+  end
+  if cap and cap.unknownRecipe then
+    return "unknown"
+  end
+  return "locked"
+end
+
+-- One craft after a depth walk. Profit may be zero or negative.
+-- Nil means the materials could not be priced, so the craft did not survive the walk.
+function Transmute:QuoteFirstCraft(def)
   if not def or type(def.inputs) ~= "table" or type(def.outputs) ~= "table" then
-    OnyxiaGold.Log:Debug("Transmute", "skip invalid recipe")
     return nil
   end
   if def.skillUnset or (def.requirements and def.requirements.skillUnset) then
-    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": skill unset")
     return nil
   end
   if table.getn(def.inputs) < 1 or table.getn(def.outputs) < 1 then
@@ -63,7 +98,6 @@ function Transmute:Evaluate(def)
   local prices = OnyxiaGold.Prices
   local saleUnit = prices:GetOpportunitySaleUnit(outputID)
   if not saleUnit then
-    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": missing output price")
     return nil
   end
 
@@ -109,23 +143,144 @@ function Transmute:Evaluate(def)
       ownedCost = ownedCost + unit * row.count
     end
     if not ownedComplete then
-      OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": cannot fill first craft")
       return nil
     end
     firstCost = ownedCost
   end
 
-  local firstProfit = net - firstCost
-  if firstProfit <= 0 then
+  local inputQty = nil
+  local hasDepth = true
+  for i = 1, table.getn(inputs) do
+    local qty = prices:GetBuyoutQuantity(inputs[i].itemID) or 0
+    if not inputQty or qty < inputQty then
+      inputQty = qty
+    end
+    if prices:GetDepth(inputs[i].itemID) == nil then
+      hasDepth = false
+    end
+  end
+
+  return {
+    def = def,
+    inputs = inputs,
+    inputIDs = inputIDs,
+    outputID = outputID,
+    outCount = outCount,
+    expectedOutput = expectedOutput,
+    saleUnit = saleUnit,
+    expectedGross = expectedGross,
+    net = net,
+    cost = firstCost,
+    profit = net - firstCost,
+    pricedFromMarket = pricedFromMarket and true or false,
+    marketCost = marketCost,
+    hasDepth = hasDepth,
+    inputQty = inputQty or 0,
+    outputQty = prices:GetBuyoutQuantity(outputID) or 0,
+  }
+end
+
+function Transmute:OpportunityFromQuote(quote, extra)
+  extra = extra or {}
+  local def = quote.def
+  local inputs = quote.inputs
+  local inputIDs = quote.inputIDs
+  local marketCrafts = extra.marketCrafts or 0
+  local totalProfit = extra.totalProfit or 0
+  local totalCost = extra.totalCost or quote.cost
+  local avgProfit = marketCrafts > 0 and math.floor(totalProfit / marketCrafts) or quote.profit
+  local outputQty = quote.outputQty or 0
+  local produced = marketCrafts * quote.outCount * quote.expectedOutput
+  local share
+  if outputQty > 0 then
+    share = produced / outputQty
+  end
+
+  local ageIDs = { quote.outputID }
+  for i = 1, table.getn(inputIDs) do
+    table.insert(ageIDs, inputIDs[i])
+  end
+  local ages = OnyxiaGold.OpportunityEngine:OldestAge(ageIDs)
+  local conf, confNotes = OnyxiaGold.OpportunityEngine:ComputeConfidence({
+    oldestDataAge = ages,
+    outputMarketQuantity = outputQty,
+    marketProfitableCrafts = marketCrafts,
+    outputCount = quote.outCount,
+    expectedOutput = quote.expectedOutput,
+    hasDepth = quote.hasDepth,
+  })
+
+  local notes = extra.notes or def.notes or ""
+  if not extra.notes then
+    notes = notes .. ". Sell-side uses P25 (fallback P10/min). Output market absorption is not modelled."
+  end
+
+  local fields = {
+    type = "TRANSMUTE",
+    typeLabel = extra.typeLabel or def.typeLabel or "Transmute",
+    name = extra.name or def.name,
+    investment = quote.cost,
+    grossRevenue = quote.expectedGross,
+    netRevenue = quote.net,
+    expectedProfit = quote.profit,
+    roi = (quote.cost > 0) and (quote.profit / quote.cost) or 0,
+    availableQuantity = marketCrafts,
+    marketProfitableCrafts = marketCrafts,
+    totalExpectedProfit = totalProfit,
+    averageProfitPerCraft = avgProfit,
+    inputMarketQuantity = quote.inputQty or 0,
+    outputMarketQuantity = outputQty,
+    marketShareAfterProduction = share,
+    confidence = conf,
+    confidenceNotes = confNotes,
+    notes = notes,
+    inputs = inputs,
+    inputItemIDs = inputIDs,
+    outputItemIDs = { quote.outputID },
+    oldestDataAge = ages,
+    expectedOutput = quote.expectedOutput,
+    saleUnit = quote.saleUnit,
+    requirements = def.requirements,
+    inputCount = inputs[1].count,
+    outputCount = quote.outCount,
+    recipeId = def.id,
+    isExpectedValue = quote.expectedOutput ~= 1,
+    winnerName = extra.winnerName,
+    runnerUpName = extra.runnerUpName,
+    runnerUpProfit = extra.runnerUpProfit,
+    forgoneLine = extra.forgoneLine,
+    sharedCooldownRow = extra.sharedCooldownRow and true or false,
+    cooldownDecision = extra.cooldownDecision,
+  }
+  return OnyxiaGold.OpportunityEngine:New(fields)
+end
+
+function Transmute:Evaluate(def)
+  local quote = self:QuoteFirstCraft(def)
+  if not quote then
+    if def and (def.skillUnset or (def.requirements and def.requirements.skillUnset)) then
+      OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": skill unset")
+    end
+    return nil
+  end
+  if quote.profit <= 0 then
     OnyxiaGold.Log:Debug("Transmute", string.format(
       "skip %s: first profit=%d cost=%d net=%d outputEV=%.2f",
-      tostring(def.name), firstProfit, firstCost, net, expectedOutput
+      tostring(def.name), quote.profit, quote.cost, quote.net, quote.expectedOutput
     ))
     return nil
   end
 
+  local inputs = quote.inputs
+  local net = quote.net
+  local firstCost = quote.cost
+  local pricedFromMarket = quote.pricedFromMarket
+  local marketCost = quote.marketCost
+  local prices = OnyxiaGold.Prices
+
   -- Market capacity only. Owned materials are reserved later by the planner.
   -- A batch is kept while its marginal cost, across every input book, stays under net.
+  -- Repeatable crafts only. A 20-hour recipe is one cast, ranked separately.
   local marketCrafts = 0
   local totalCost = firstCost
   if pricedFromMarket then
@@ -174,93 +329,159 @@ function Transmute:Evaluate(def)
   if marketCrafts > 0 then
     totalProfit = marketCrafts * net - totalCost
   end
-  local avgProfit = marketCrafts > 0 and math.floor(totalProfit / marketCrafts) or firstProfit
-
-  local inputQty = nil
-  local hasDepth = true
-  for i = 1, table.getn(inputs) do
-    local qty = prices:GetBuyoutQuantity(inputs[i].itemID) or 0
-    if not inputQty or qty < inputQty then
-      inputQty = qty
-    end
-    if prices:GetDepth(inputs[i].itemID) == nil then
-      hasDepth = false
-    end
-  end
-  local outputQty = prices:GetBuyoutQuantity(outputID)
-  local produced = marketCrafts * outCount * expectedOutput
-  local share
-  if outputQty > 0 then
-    share = produced / outputQty
-  end
-
-  local ageIDs = { outputID }
-  for i = 1, table.getn(inputIDs) do
-    table.insert(ageIDs, inputIDs[i])
-  end
-  local ages = OnyxiaGold.OpportunityEngine:OldestAge(ageIDs)
-  local conf, confNotes = OnyxiaGold.OpportunityEngine:ComputeConfidence({
-    oldestDataAge = ages,
-    outputMarketQuantity = outputQty,
-    marketProfitableCrafts = marketCrafts,
-    outputCount = outCount,
-    expectedOutput = expectedOutput,
-    hasDepth = hasDepth,
-  })
-
-  local notes = def.notes or ""
-  notes = notes .. ". Sell-side uses P25 (fallback P10/min). Output market absorption is not modelled."
 
   OnyxiaGold.Log:Debug("Transmute", string.format(
     "hit %s first=%d total=%d marketCrafts=%d outputEV=%.2f",
-    tostring(def.name), firstProfit, totalProfit, marketCrafts, expectedOutput
+    tostring(quote.def.name), quote.profit, totalProfit, marketCrafts, quote.expectedOutput
   ))
 
+  return self:OpportunityFromQuote(quote, {
+    marketCrafts = marketCrafts,
+    totalProfit = totalProfit,
+    totalCost = totalCost,
+  })
+end
+
+function Transmute:UnknownRow(def)
+  local inputs, inputIDs = copyInputs(def.inputs)
+  local output = def.outputs and def.outputs[1]
+  local outputID = tonumber(output and output.itemID)
   return OnyxiaGold.OpportunityEngine:New({
     type = "TRANSMUTE",
-    typeLabel = def.typeLabel or "Transmute",
+    typeLabel = "Transmute",
     name = def.name,
-    investment = firstCost,
-    grossRevenue = expectedGross,
-    netRevenue = net,
-    expectedProfit = firstProfit,
-    roi = firstProfit / firstCost,
-    availableQuantity = marketCrafts,
-    marketProfitableCrafts = marketCrafts,
-    totalExpectedProfit = totalProfit,
-    averageProfitPerCraft = avgProfit,
-    inputMarketQuantity = inputQty or 0,
-    outputMarketQuantity = outputQty,
-    marketShareAfterProduction = share,
-    confidence = conf,
-    confidenceNotes = confNotes,
-    notes = notes,
+    notes = "Recipe state is unknown until a profession scan.",
     inputs = inputs,
     inputItemIDs = inputIDs,
-    outputItemIDs = { outputID },
-    oldestDataAge = ages,
-    expectedOutput = expectedOutput,
-    saleUnit = saleUnit,
+    outputItemIDs = outputID and { outputID } or nil,
     requirements = def.requirements,
-    inputCount = inputs[1].count,
-    outputCount = outCount,
+    inputCount = inputs and inputs[1] and inputs[1].count or 1,
+    outputCount = tonumber(output and output.count) or 1,
     recipeId = def.id,
-    isExpectedValue = expectedOutput ~= 1,
+    expectedProfit = 0,
+    totalExpectedProfit = 0,
+    marketProfitableCrafts = 0,
+    availableQuantity = 0,
   })
+end
+
+local function forgoneText(runner)
+  if not runner then
+    return "No other 20-hour transmute beats selling its materials."
+  end
+  local gold = OnyxiaGold.FormatGoldShort(runner.profit)
+  return "Skipping " .. tostring(runner.def.name) .. " gives up " .. gold .. "."
+end
+
+-- One row for the shared 20-hour group. Only recipes this skill can perform.
+-- Nil when none are performable. A skip row when every priced one loses to selling.
+function Transmute:RankCooldown(defs)
+  local ready = {}
+  local passthrough = {}
+  for i = 1, table.getn(defs) do
+    local def = defs[i]
+    local gate = self:RecipeGate(def)
+    if gate == "unknown" then
+      table.insert(passthrough, self:UnknownRow(def))
+    elseif gate == "ready" then
+      local quote = self:QuoteFirstCraft(def)
+      if quote then
+        table.insert(ready, quote)
+      end
+    end
+  end
+
+  local winners = {}
+  local losers = 0
+  for i = 1, table.getn(ready) do
+    local quote = ready[i]
+    if quote.profit > 0 then
+      table.insert(winners, quote)
+    else
+      losers = losers + 1
+    end
+  end
+  table.sort(winners, function(a, b)
+    if a.profit == b.profit then
+      return (a.cost or 0) < (b.cost or 0)
+    end
+    return a.profit > b.profit
+  end)
+
+  if table.getn(winners) > 0 then
+    local best = winners[1]
+    local runner = winners[2]
+    local line = forgoneText(runner)
+    local notes = (best.def.notes or "") .. " " .. line
+    local row = self:OpportunityFromQuote(best, {
+      marketCrafts = 1,
+      totalProfit = best.profit,
+      totalCost = best.cost,
+      name = best.def.name,
+      typeLabel = "20-hour",
+      notes = notes,
+      winnerName = best.def.name,
+      runnerUpName = runner and runner.def.name or nil,
+      runnerUpProfit = runner and runner.profit or 0,
+      forgoneLine = line,
+      sharedCooldownRow = true,
+      cooldownDecision = "cast",
+    })
+    return row, passthrough
+  end
+
+  if losers > 0 then
+    local skip = OnyxiaGold.OpportunityEngine:New({
+      type = "TRANSMUTE",
+      typeLabel = "20-hour",
+      name = "Skip 20-hour transmute",
+      notes = "Skip. None of these beat selling the materials.",
+      expectedProfit = 0,
+      totalExpectedProfit = 0,
+      marketProfitableCrafts = 0,
+      availableQuantity = 0,
+      forgoneLine = "Skip. None of these beat selling the materials.",
+      sharedCooldownRow = true,
+      cooldownDecision = "skip",
+    })
+    return skip, passthrough
+  end
+
+  return nil, passthrough
 end
 
 function Transmute:Collect()
   local out = {}
+  local cooldown = {}
   local recipes = OnyxiaGold.Data.Transmutes or {}
   for i = 1, table.getn(recipes) do
-    local ok, opp = pcall(function()
-      return self:Evaluate(recipes[i])
-    end)
-    if ok and opp then
-      table.insert(out, opp)
-    elseif not ok then
-      OnyxiaGold.Log:Error("Transmute", "evaluate error: " .. tostring(opp))
+    local def = recipes[i]
+    if cooldownOf(def) == COOLDOWN_GROUP then
+      table.insert(cooldown, def)
+    else
+      local ok, opp = pcall(function()
+        return self:Evaluate(def)
+      end)
+      if ok and opp then
+        table.insert(out, opp)
+      elseif not ok then
+        OnyxiaGold.Log:Error("Transmute", "evaluate error: " .. tostring(opp))
+      end
     end
+  end
+  local ok, ranked, passthrough = pcall(function()
+    return self:RankCooldown(cooldown)
+  end)
+  if not ok then
+    OnyxiaGold.Log:Error("Transmute", "cooldown rank error: " .. tostring(ranked))
+    return out
+  end
+  if ranked then
+    table.insert(out, ranked)
+  end
+  passthrough = passthrough or {}
+  for i = 1, table.getn(passthrough) do
+    table.insert(out, passthrough[i])
   end
   return out
 end

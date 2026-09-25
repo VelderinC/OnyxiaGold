@@ -23,10 +23,10 @@
   Held stock is a count, not an asking price. A transmute needs its tool on
   him. A buy stops at free bag slots.
 
-  Candidate classes (ranking remains data-driven, not a hard Alchemy > Enchanting order):
-  zero-cash owned transforms, high-EV Alchemy, Enchanting destruction (v0.2.0),
-  Enchanting material conversions, scroll manufacturing, other AH arbitrage,
-  then profession-independent farms when capital is waiting.
+  A profitable 20-hour transmute is one cast and sorts above repeatable crafts.
+  The row names the winner and the gold given up by skipping the runner-up.
+  If none of the recipes this skill can perform beat selling their materials,
+  the row says skip. Titanium, Earthsiege, and Skyflare are not on that cooldown.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -576,6 +576,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     return true
   end
 
+  if opp.cooldownDecision == "skip" then
+    person.state = "SKIP_COOLDOWN"
+    person.reason = "Skip"
+    person.capabilityAllowedCrafts = 0
+    person.executableCrafts = 0
+    person.sensibleCrafts = 0
+    return person
+  end
+
   if opp.actionable == false then
     person.state = "NOT_ACTIONABLE"
     person.reason = "Not actionable until the recipe and the tool are represented"
@@ -836,10 +845,17 @@ local function actionFromPerson(person, index)
   local kind = "CRAFT"
   local name = opp.name or "Craft"
   local detail
+  if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+    name = opp.winnerName or opp.name or "20-hour transmute"
+  end
   if cash <= 0 then
     kind = "CRAFT_OWNED"
-    detail = string.format("Use owned materials · %d crafts", crafts)
-    name = "Use owned: " .. tostring(opp.name)
+    if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+      detail = opp.forgoneLine or string.format("Use owned materials · %d crafts", crafts)
+    else
+      detail = string.format("Use owned materials · %d crafts", crafts)
+      name = "Use owned: " .. tostring(opp.name)
+    end
   else
     local bits = {}
     local lines = person.inputLines
@@ -865,8 +881,12 @@ local function actionFromPerson(person, index)
       table.insert(bits, tostring(needBuy) .. " " .. tostring(itemName))
     end
     kind = "BUY_AND_CRAFT"
-    name = "Buy " .. table.concat(bits, " + ")
-    detail = string.format("Then %d %s", crafts, tostring(opp.name))
+    if opp.sharedCooldownRow and opp.cooldownDecision == "cast" then
+      detail = opp.forgoneLine or string.format("Then %d %s", crafts, tostring(name))
+    else
+      name = "Buy " .. table.concat(bits, " + ")
+      detail = string.format("Then %d %s", crafts, tostring(opp.name))
+    end
   end
 
   return {
@@ -1115,23 +1135,38 @@ function Planner:Refresh()
     guard = guard + 1
     local bestI
     local bestScore
+    local bestPri = 0
     for i = 1, table.getn(people) do
       if not used[i] then
         local person = self:Personalize(opps[i], remaining, 0)
         people[i] = person
         if person.state == "ACTIONABLE_NOW" and (person.sensibleCrafts or 0) > 0 then
           if (person.cashRequiredNow or 0) <= remaining then
+            local pri = 0
+            local src = person.opp
+            if src and src.sharedCooldownRow and src.cooldownDecision == "cast" then
+              pri = 1
+            end
             local s = scoreOf(person)
-            if not bestScore or s > bestScore then
-              bestScore = s
-              bestI = i
-            elseif s == bestScore then
+            local take = false
+            if not bestI then
+              take = true
+            elseif pri > bestPri then
+              take = true
+            elseif pri == bestPri and s > bestScore then
+              take = true
+            elseif pri == bestPri and s == bestScore then
               local bestP = people[bestI]
               local roiA = person.roi or 0
               local roiB = bestP.roi or 0
               if roiA > roiB or (roiA == roiB and (person.cashRequiredNow or 0) < (bestP.cashRequiredNow or 0)) then
-                bestI = i
+                take = true
               end
+            end
+            if take then
+              bestScore = s
+              bestPri = pri
+              bestI = i
             end
           end
         end
@@ -1160,7 +1195,20 @@ function Planner:Refresh()
     if not used[i] then
       local person = self:Personalize(opps[i], remaining, afterMailBudget(remaining))
       people[i] = person
-      if person.state == "ACTIONABLE_AFTER_MAIL" then
+      if person.opp and person.opp.cooldownDecision == "skip" then
+        table.insert(self.actions, {
+          kind = "SKIP_COOLDOWN",
+          name = "Skip 20-hour transmute",
+          typeLabel = "20-hour",
+          expectedProfit = 0,
+          cashRequiredNow = 0,
+          crafts = 0,
+          state = "SKIP_COOLDOWN",
+          detail = person.opp.forgoneLine or "Skip. None of these beat selling the materials.",
+          person = person,
+          sourceOpp = person.opp,
+        })
+      elseif person.state == "ACTIONABLE_AFTER_MAIL" then
         unlockedByMail = unlockedByMail + 1
       elseif person.state == "WAITING_FOR_FUNDS"
         or person.state == "LOCKED_PROFESSION"

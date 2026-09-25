@@ -388,7 +388,7 @@ local function maxCraftsForCash(opp, owned, deployable, capMax)
   return lo
 end
 
-function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill)
+function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, beyondGold)
   deployable = tonumber(deployable) or 0
   -- 0 means the caller is ignoring mail (cash-allocation loop).
   -- Otherwise this is Capital:GetSpendableAfterMail(), already reserve-adjusted,
@@ -428,6 +428,37 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill)
         skillPreview = true
         previewProfession = profession
         previewNeed = need
+      end
+    end
+  end
+  -- Display-only, and only for the beyond-gold list. Missing profession or
+  -- short skill can be priced. An unset minimum skill cannot. This does not
+  -- enter the greedy selection and does not change profit math.
+  local goldSkillGap = false
+  if beyondGold and not cap.skillUnset then
+    local req = opp.requirements
+    local profession = req and req.profession
+    local need = req and tonumber(req.minimumSkill)
+    if need and need > 0 and (profession == "Alchemy" or profession == "Enchanting") then
+      if not previewProfession then
+        previewProfession = profession
+        previewNeed = need
+      end
+      if not cap.executable and (cap.missingProfession or cap.missingSkill) then
+        local relaxed = {}
+        for key, value in pairs(req) do
+          relaxed[key] = value
+        end
+        relaxed.minimumSkill = 0
+        if cap.missingProfession then
+          relaxed.profession = nil
+          relaxed.recipeSpellID = nil
+        end
+        local again = OnyxiaGold.Capabilities:CanExecute(relaxed)
+        if again.executable then
+          cap = again
+          goldSkillGap = true
+        end
       end
     end
   end
@@ -500,6 +531,7 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill)
     skillPreview = skillPreview,
     previewProfession = previewProfession,
     previewNeed = previewNeed,
+    goldSkillGap = goldSkillGap,
   }
 
   local function commit(n)
@@ -852,10 +884,70 @@ local function previewAction(person, index)
   return action
 end
 
+-- Far above the 3.3.5 gold cap, so cash is not what limits the priced quantity.
+local UNLIMITED_COPPER = 20000000000
+
+local function beyondGoldRecipe(opp)
+  if not opp or opp.actionable == false then
+    return nil
+  end
+  local req = opp.requirements
+  if type(req) ~= "table" or req.skillUnset or opp.skillUnset then
+    return nil
+  end
+  local profession = req.profession
+  if profession ~= "Alchemy" and profession ~= "Enchanting" then
+    return nil
+  end
+  local need = tonumber(req.minimumSkill)
+  if not need or need <= 0 then
+    return nil
+  end
+  return profession
+end
+
+local function goldPreviewAction(person, deployable)
+  local action = actionFromPerson(person, 0)
+  local cash = tonumber(action.cashRequiredNow) or 0
+  local have = tonumber(deployable) or 0
+  local shortfall = cash - have
+  if shortfall < 0 then
+    shortfall = 0
+  end
+  local goldLabel = string.format(
+    "Needs %s more. Cash required %s.",
+    OnyxiaGold.FormatGoldShort(shortfall),
+    OnyxiaGold.FormatGoldShort(cash)
+  )
+  action.kind = "GOLD_PREVIEW"
+  action.actionable = false
+  action.goldLabel = goldLabel
+  action.name = goldLabel
+  action.state = "GOLD_PREVIEW"
+  action.detail = goldLabel .. " Not a buy."
+  action.skillLabel = nil
+  if person.goldSkillGap then
+    local profession = person.previewProfession or "Profession"
+    local need = tonumber(person.previewNeed) or 0
+    action.skillLabel = string.format("Needs %s %d.", profession, need)
+    action.name = goldLabel .. " " .. action.skillLabel
+    action.detail = action.name .. " Not a buy."
+  end
+  return action
+end
+
 function Planner:ShowAboveSkill()
   return OnyxiaGoldDB
     and OnyxiaGoldDB.settings
     and OnyxiaGoldDB.settings.showAboveSkill
+    and true
+    or false
+end
+
+function Planner:ShowBeyondGold()
+  return OnyxiaGoldDB
+    and OnyxiaGoldDB.settings
+    and OnyxiaGoldDB.settings.showBeyondGold
     and true
     or false
 end
@@ -945,6 +1037,26 @@ function Planner:Refresh()
       local person = self:Personalize(opps[i], deployable, afterMailBudget(deployable), true)
       if person.skillPreview and person.state == "ACTIONABLE_NOW" and (person.sensibleCrafts or 0) > 0 then
         table.insert(previewPeople, person)
+      end
+    end
+  end
+
+  -- Priced on the fresh book, then left out of the greedy selection.
+  -- Not reserved and not buys. Skill does not filter this list.
+  local goldPeople = {}
+  if self:ShowBeyondGold() then
+    for i = 1, table.getn(opps) do
+      local opp = opps[i]
+      if beyondGoldRecipe(opp) then
+        local real = self:Personalize(opp, deployable, afterMailBudget(deployable), false, true)
+        local canPay = real.state == "ACTIONABLE_NOW" and (real.sensibleCrafts or 0) > 0
+        if not canPay then
+          local priced = self:Personalize(opp, UNLIMITED_COPPER, UNLIMITED_COPPER, false, true)
+          local cash = priced.cashRequiredNow or 0
+          if priced.state == "ACTIONABLE_NOW" and (priced.sensibleCrafts or 0) > 0 and cash > deployable then
+            table.insert(goldPeople, priced)
+          end
+        end
       end
     end
   end
@@ -1134,6 +1246,30 @@ function Planner:Refresh()
     end)
     for i = 1, table.getn(previewPeople) do
       table.insert(self.actions, previewAction(previewPeople[i], 0))
+    end
+  end
+
+  if table.getn(goldPeople) > 0 then
+    local listed = {}
+    for i = 1, table.getn(self.actions) do
+      local src = self.actions[i].sourceOpp
+      if src then
+        listed[src] = true
+      end
+    end
+    table.sort(goldPeople, function(a, b)
+      local pa = a.economicProfit or 0
+      local pb = b.economicProfit or 0
+      if pa == pb then
+        return (a.cashRequiredNow or 0) < (b.cashRequiredNow or 0)
+      end
+      return pa > pb
+    end)
+    for i = 1, table.getn(goldPeople) do
+      local person = goldPeople[i]
+      if not listed[person.opp] then
+        table.insert(self.actions, goldPreviewAction(person, deployable))
+      end
     end
   end
 

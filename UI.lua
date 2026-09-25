@@ -178,6 +178,13 @@ local function rowTitle(action)
   local parts = {}
   if action.kind == "SKILL_PREVIEW" and action.skillLabel and action.skillLabel ~= "" then
     table.insert(parts, action.skillLabel)
+  elseif action.kind == "GOLD_PREVIEW" then
+    if action.goldLabel and action.goldLabel ~= "" then
+      table.insert(parts, action.goldLabel)
+    end
+    if action.skillLabel and action.skillLabel ~= "" then
+      table.insert(parts, action.skillLabel)
+    end
   else
     local instruction = actionInstruction(action)
     if instruction and instruction ~= "" then
@@ -377,6 +384,29 @@ function UI:Create()
     local on = self:GetChecked() and true or false
     OnyxiaGoldDB.settings.showAboveSkill = on
     OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
+    end
+    OnyxiaGold.UI:Refresh()
+  end)
+
+  local goldPreview = CreateFrame("CheckButton", "OnyxiaGoldGoldPreviewCheck", frame, "UICheckButtonTemplate")
+  goldPreview:SetWidth(24)
+  goldPreview:SetHeight(24)
+  if skillText then
+    goldPreview:SetPoint("LEFT", skillText, "RIGHT", 18, 0)
+  else
+    goldPreview:SetPoint("LEFT", skillPreview, "RIGHT", 160, 0)
+  end
+  local goldText = getglobal("OnyxiaGoldGoldPreviewCheckText")
+  if goldText then
+    goldText:SetText("Show beyond my gold")
+  end
+  goldPreview:SetScript("OnClick", function(self)
+    OnyxiaGold.Database:Ensure()
+    local on = self:GetChecked() and true or false
+    OnyxiaGoldDB.settings.showBeyondGold = on
+    OnyxiaGold.Log:Info("UI", "Show beyond my gold " .. tostring(on))
     if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
@@ -668,6 +698,7 @@ function UI:Create()
   self.refreshButton = refreshBtn
   self.masterCheck = master
   self.skillCheck = skillPreview
+  self.goldCheck = goldPreview
   self.identityLabel = identity
   self.professionLabel = professions
   self.factoryLabel = factory
@@ -865,6 +896,11 @@ function UI:ShowActionTooltip(row)
   end
   if action.kind == "SKILL_PREVIEW" then
     GameTooltip:AddLine((action.skillLabel or "Above your skill") .. " Not a buy.", 1, 0.82, 0.4, 1)
+  elseif action.kind == "GOLD_PREVIEW" then
+    GameTooltip:AddLine((action.goldLabel or "Beyond your gold") .. " Not a buy.", 1, 0.82, 0.4, 1)
+    if action.skillLabel and action.skillLabel ~= "" then
+      GameTooltip:AddLine(action.skillLabel, 1, 0.82, 0.4, 1)
+    end
   elseif action.kind == "COLLECT_MAIL" then
     GameTooltip:AddLine("Visit a mailbox and collect gold. The addon will not loot mail.", 1, 0.85, 0.4, 1)
   elseif action.kind == "BUY_AND_CRAFT" then
@@ -1241,7 +1277,8 @@ function UI:UpdateList()
       row:Show()
       local label = tostring(offset + i) .. ". " .. rowTitle(action)
       row.cells.name:SetText(label)
-      paintTone(row, action.kind == "SKILL_PREVIEW")
+      local previewRow = action.kind == "SKILL_PREVIEW" or action.kind == "GOLD_PREVIEW"
+      paintTone(row, previewRow)
       if action.kind == "COLLECT_MAIL" then
         row.cells.profit:SetText("")
         local ready = OnyxiaGold.FormatGoldShort(action.claimable or 0)
@@ -1256,7 +1293,7 @@ function UI:UpdateList()
         row.cells.crafts:SetText(tostring(action.crafts or 0))
       end
       row.cells.type:SetText(action.typeLabel or action.kind or "")
-      if action.kind == "SKILL_PREVIEW" and row.buyButton then
+      if previewRow and row.buyButton then
         row.buyButton:Hide()
       end
       self:PaintBuyRow(row, action)
@@ -1289,6 +1326,14 @@ function UI:Refresh()
       self.skillCheck:SetChecked(0)
     end
   end
+  if self.goldCheck then
+    local on = OnyxiaGoldDB and OnyxiaGoldDB.settings and OnyxiaGoldDB.settings.showBeyondGold
+    if on then
+      self.goldCheck:SetChecked(1)
+    else
+      self.goldCheck:SetChecked(0)
+    end
+  end
 
   self:RefreshHeader()
 
@@ -1298,9 +1343,12 @@ function UI:Refresh()
   end
   local real = 0
   local preview = 0
+  local beyond = 0
   for i = 1, table.getn(actions) do
     if actions[i].kind == "SKILL_PREVIEW" then
       preview = preview + 1
+    elseif actions[i].kind == "GOLD_PREVIEW" then
+      beyond = beyond + 1
     else
       real = real + 1
     end
@@ -1310,7 +1358,7 @@ function UI:Refresh()
     -- Scanner owns the status line while a scan is in progress.
   else
     local hint = OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner:UnknownRecipeHint()
-    if real == 0 and preview == 0 then
+    if real == 0 and preview == 0 and beyond == 0 then
       local market = OnyxiaGold.Database:GetMarket()
       if not market or not market.latest or not next(market.latest) then
         self:SetStatus("No price data yet. Open the Auction House and click Quick Scan.")
@@ -1324,8 +1372,18 @@ function UI:Refresh()
       if preview > 0 then
         extra = extra .. "  " .. tostring(preview) .. " above your skill."
       end
+      if beyond > 0 then
+        extra = extra .. "  " .. tostring(beyond) .. " beyond your gold."
+      end
       if real == 0 then
-        self:SetStatus(tostring(preview) .. " above your skill." .. (hint and ("  " .. hint) or ""))
+        local bits = {}
+        if preview > 0 then
+          table.insert(bits, tostring(preview) .. " above your skill")
+        end
+        if beyond > 0 then
+          table.insert(bits, tostring(beyond) .. " beyond your gold")
+        end
+        self:SetStatus(table.concat(bits, ". ") .. "." .. (hint and ("  " .. hint) or ""))
       else
         self:SetStatus(tostring(real) .. " personal actions from current capital." .. extra)
       end

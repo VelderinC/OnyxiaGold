@@ -46,6 +46,7 @@ function DB:DefaultSettings()
     useGetAll = false,
     capitalReservePercent = 0.10,
     showAboveSkill = false,
+    showBeyondGold = false,
   }
 end
 

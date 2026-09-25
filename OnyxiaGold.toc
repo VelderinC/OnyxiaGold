@@ -2,7 +2,7 @@
 ## Title: OnyxiaGold
 ## Notes: Economic optimisation and Auction House analysis for Warmane Onyxia
 ## Author: Charles / Velderin
-## Version: 0.1.16
+## Version: 0.1.17
 ## SavedVariables: OnyxiaGoldDB
 ## DefaultState: enabled
 

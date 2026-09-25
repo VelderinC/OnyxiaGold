@@ -157,7 +157,8 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     return nil
   end
 
-  local marketCost = prices:GetAcquisitionCost(sourceID, sourceCount)
+  local marketCost = prices.GetEconomicAcquisitionCost and prices:GetEconomicAcquisitionCost(sourceID, sourceCount)
+    or prices:GetAcquisitionCost(sourceID, sourceCount)
   local firstCost = marketCost
   local pricedFromMarket = marketCost and marketCost > 0
   local owned = 0

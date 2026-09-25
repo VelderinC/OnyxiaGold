@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.29"
+OnyxiaGold.Version = "0.1.30"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -285,8 +285,31 @@ function OnyxiaGold:HandleSlash(msg)
     self.UI:Toggle()
   elseif msg == "scan" or msg == "quick" then
     self.Scanner:StartQuick()
+  elseif msg == "deep" then
+    self.Scanner:StartDeep()
   elseif msg == "full" then
     self.Scanner:StartFull()
+  elseif msg == "test" then
+    local text = "OnyxiaGold test: FAIL"
+    if self.Tests and self.Tests.Run then
+      text = self.Tests:Run()
+    end
+    local startAt = 1
+    local length = string.len(text)
+    while startAt <= length do
+      local newline = string.find(text, "\n", startAt, true)
+      local line
+      if newline then
+        line = string.sub(text, startAt, newline - 1)
+        startAt = newline + 1
+      else
+        line = string.sub(text, startAt)
+        startAt = length + 1
+      end
+      if line ~= "" then
+        self:Print(line, "Test")
+      end
+    end
   elseif msg == "opportunities" or msg == "opp" then
     self.OpportunityEngine:Refresh()
     self.UI:Show()
@@ -320,7 +343,7 @@ function OnyxiaGold:HandleSlash(msg)
     end
     self.OpportunityEngine:Refresh()
   else
-    self:Print("Commands: /og, /og scan, /og full, /og opportunities, /og debug, /og log, /og reset, /og master")
+    self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og debug, /og log, /og reset, /og master")
   end
 end
 
@@ -349,6 +372,9 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     end
     if OnyxiaGold.Log and OnyxiaGold.Log.StartSession then
       OnyxiaGold.Log:StartSession()
+    end
+    if OnyxiaGold.ExternalMarket and OnyxiaGold.ExternalMarket.Reload then
+      OnyxiaGold.ExternalMarket:Reload()
     end
     if OnyxiaGold.CharacterState and OnyxiaGold.CharacterState.OnLogin then
       OnyxiaGold.CharacterState:OnLogin()

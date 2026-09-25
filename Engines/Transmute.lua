@@ -111,7 +111,12 @@ function Transmute:QuoteFirstCraft(def)
     local total = 0
     for i = 1, table.getn(inputs) do
       local row = inputs[i]
-      local part = prices:GetAcquisitionCost(row.itemID, crafts * row.count)
+      local part
+      if prices.GetEconomicAcquisitionCost then
+        part = prices:GetEconomicAcquisitionCost(row.itemID, crafts * row.count)
+      else
+        part = prices:GetAcquisitionCost(row.itemID, crafts * row.count)
+      end
       if not part then
         return nil
       end

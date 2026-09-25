@@ -1259,7 +1259,20 @@ function UI:ShowActionTooltip(row)
     GameTooltip:AddLine(action.detail, 0.85, 0.85, 0.85, 1)
   end
   GameTooltip:AddLine("Cash required now: " .. OnyxiaGold.FormatMoney(action.cashRequiredNow or 0), 1, 1, 1)
-  GameTooltip:AddLine("Expected economic profit: " .. OnyxiaGold.FormatMoneySigned(action.expectedProfit or 0), 0.2, 1, 0.2)
+  if action.kind == "POST" then
+    GameTooltip:AddLine("Expected revenue: " .. OnyxiaGold.FormatMoney(action.expectedRevenue or 0), 1, 1, 1)
+    GameTooltip:AddLine("Cash released if it sells: " .. OnyxiaGold.FormatMoney(action.cashReleased or action.expectedRevenue or 0), 1, 1, 1)
+    GameTooltip:AddLine("Inventory value: " .. OnyxiaGold.FormatMoney(action.inventoryValue or 0), 1, 1, 1)
+    GameTooltip:AddLine("Expected profit: " .. OnyxiaGold.FormatMoneySigned(action.expectedProfit or 0), 0.2, 1, 0.2)
+    if action.saleUnit then
+      GameTooltip:AddLine("Sale unit: " .. OnyxiaGold.FormatMoney(action.saleUnit), 0.8, 0.8, 0.8)
+    end
+    if action.stackBuyout then
+      GameTooltip:AddLine("Stack buyout: " .. OnyxiaGold.FormatMoney(action.stackBuyout), 0.8, 0.8, 0.8)
+    end
+  else
+    GameTooltip:AddLine("Expected economic profit: " .. OnyxiaGold.FormatMoneySigned(action.expectedProfit or 0), 0.2, 1, 0.2)
+  end
   if action.crafts and action.crafts > 0 then
     GameTooltip:AddLine("Planned crafts: " .. tostring(action.crafts), 1, 1, 1)
   end
@@ -1617,6 +1630,10 @@ function UI:OnBuyClick(row)
     self:UpdateList()
     return
   end
+  if not OnyxiaGold.Lots or not OnyxiaGold.Lots.AllowPlaceAuctionBid(bid, true) then
+    self:UpdateList()
+    return
+  end
   if type(PlaceAuctionBid) ~= "function" then
     return
   end
@@ -1716,6 +1733,48 @@ function UI:OnPostClick(row)
     self:SetStatus("No sale price for that stack.")
     return
   end
+  local age = OnyxiaGold.Prices and OnyxiaGold.Prices.GetAge and OnyxiaGold.Prices:GetAge(itemID)
+  local stale = true
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.IsStale then
+    stale = OnyxiaGold.Lots.IsStale(age, OnyxiaGold.Config and OnyxiaGold.Config.QuickScanStaleSeconds)
+  end
+  local record = OnyxiaGold.Prices and OnyxiaGold.Prices.GetRecord and OnyxiaGold.Prices:GetRecord(itemID)
+  local external = record and record.source == "external"
+  local marketMin = OnyxiaGold.Prices and OnyxiaGold.Prices.GetMarketMinimum and OnyxiaGold.Prices:GetMarketMinimum(itemID)
+  local ownMin = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
+    and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
+  local floorUnit = tonumber(action.economicFloor) or saleUnit
+  local policy = OnyxiaGold.Lots and OnyxiaGold.Lots.PostPolicy and OnyxiaGold.Lots.PostPolicy({
+    economicFloor = floorUnit,
+    marketMinimum = marketMin,
+    ownMinimum = ownMin,
+    stackSize = stack,
+    stale = stale,
+    external = external and true or false,
+    liveValidated = not stale and not external,
+  })
+  local buyout = policy and policy.totalBuyout or math.floor(saleUnit * stack + 0.5)
+  local allowed = OnyxiaGold.Lots and OnyxiaGold.Lots.AllowStartAuction and OnyxiaGold.Lots.AllowStartAuction({
+    validated = policy and policy.decision == "post",
+    stale = stale,
+    external = external and true or false,
+    matches = policy and action.stackBuyout and policy.totalBuyout == action.stackBuyout,
+    buyout = buyout,
+  })
+  if not allowed then
+    if policy and policy.decision == "needs_validation" then
+      self:SetStatus("Need a fresh market check before posting. Run a scan of this item, then click Post again.")
+    elseif policy and action.stackBuyout and policy.totalBuyout ~= action.stackBuyout then
+      self:SetStatus("Price changed. The row will refresh. Click Post again to list at the checked price.")
+      if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+        OnyxiaGold.ActionPlanner:Refresh()
+      end
+      self:Refresh()
+    else
+      self:SetStatus("That post is not live-checked, so it was not listed.")
+    end
+    return
+  end
   if type(PickupContainerItem) ~= "function"
     or type(ClickAuctionSellItemButton) ~= "function"
     or type(StartAuction) ~= "function" then
@@ -1742,7 +1801,8 @@ function UI:OnPostClick(row)
     self:SetStatus("That item is not in your bags.")
     return
   end
-  local buyout = math.floor(saleUnit * postCount + 0.5)
+  local unit = (policy and policy.targetPrice) or saleUnit
+  buyout = math.floor(unit * postCount + 0.5)
   local bid = buyout
   local duration = tonumber(action.duration) or 2
   if duration ~= 1 and duration ~= 2 and duration ~= 3 then

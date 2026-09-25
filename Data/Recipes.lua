@@ -98,13 +98,12 @@ OnyxiaGold.Data.Conversions = {
   },
 }
 
--- Philosopher's Stone (item 9149) is a tool on every transmute. It is not
--- consumed and it is not an input. The planner requires it in bags or equipped.
--- Later stones stay unconfirmed until one transmute with that item is recorded.
+-- Any verified transmutation stone in bags or equipped. It is not consumed
+-- and it is not an input. Bank-only is a withdraw. None is missing.
 local function alchemyTool(requirements)
   requirements.profession = "Alchemy"
-  requirements.tool = "Philosopher's Stone"
-  requirements.toolItemID = I.PHILOSOPHERS_STONE.id
+  requirements.tool = "Transmutation stone"
+  requirements.requiredToolCategory = "TRANSMUTATION_STONE"
   requirements.toolConsumed = false
   requirements.specialisationOptional = "Transmutation"
   return requirements

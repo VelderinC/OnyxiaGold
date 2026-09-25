@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: OnyxiaGold External
+## Notes: Optional Onyxia Alliance market snapshot for OnyxiaGold
+## Author: Charles / Velderin
+## Version: 0.1.30
+## LoadOnDemand: 0
+
+MarketData.lua

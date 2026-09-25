@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.30 — Economic integrity
+
+- A buy is a whole auction. Cash required is the listing price. Leftover units stay in the plan and the next action can use them. A craft is kept only while its own marginal value stays positive.
+- Disenchant is offered only when the intact sale is known and worse, the item cannot be sold, or it is marked destruction stock. Opening the Auction House no longer starts a browse or a post. Post profit is sale proceeds minus the value of the stack, and a stale or external price is not posted.
+- External prices load from the OnyxiaGoldExternal addon. The sync tool replaces that file with os.replace and leaves the previous snapshot in place when the download fails. Any transmutation stone in bags or equipped counts. The 20-hour transmute stays unknown until Alchemy has been open and GetTradeSkillCooldown has been read. /reload rebuilds opportunities once when market data is already saved.
+
 ## 0.1.29 — Post the finished stack
 
 - After a conversion, transmute, or craft is in your bags, What to do now keeps a row that says to post it, with the bag count and the P25 price after the auction-house cut. The row stays when there is nothing left to buy.

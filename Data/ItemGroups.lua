@@ -34,16 +34,18 @@ local Items = {
   SARONITE_BAR = { id = 36913, name = "Saronite Bar" },
   TITANIUM_BAR = { id = 41163, name = "Titanium Bar" },
 
-  -- Alchemy transmute reagents and outputs. Names only; prices come from the scan.
-  -- Philosopher's Stone is a tool, not an input. Later stones are named only.
-  -- Their tool-category membership is unset, so they are not valid transmute tools yet.
+  -- Alchemy transmute tools. Any one of TransmutationStones works.
+  -- They are not reagents and they are not consumed.
+  -- 31080 Mercurial Stone is a reagent, not Mercurial Alchemist Stone.
   PHILOSOPHERS_STONE = { id = 9149, name = "Philosopher's Stone" },
-  ALCHEMISTS_STONE = { id = 35748, name = "Alchemist's Stone" },
-  ASSASSINS_ALCHEMIST_STONE = { id = 35749, name = "Assassin's Alchemist Stone" },
-  GUARDIANS_ALCHEMIST_STONE = { id = 35750, name = "Guardian's Alchemist Stone" },
-  REDEEMERS_ALCHEMIST_STONE = { id = 35751, name = "Redeemer's Alchemist Stone" },
-  MIGHTY_ALCHEMISTS_STONE = { id = 44322, name = "Mighty Alchemist's Stone" },
+  ALCHEMISTS_STONE = { id = 13503, name = "Alchemist's Stone" },
+  GUARDIANS_ALCHEMIST_STONE = { id = 35748, name = "Guardian's Alchemist Stone" },
+  SORCERERS_ALCHEMIST_STONE = { id = 35749, name = "Sorcerer's Alchemist Stone" },
+  REDEEMERS_ALCHEMIST_STONE = { id = 35750, name = "Redeemer's Alchemist Stone" },
+  ASSASSINS_ALCHEMIST_STONE = { id = 35751, name = "Assassin's Alchemist Stone" },
+  MERCURIAL_ALCHEMIST_STONE = { id = 44322, name = "Mercurial Alchemist Stone" },
   INDESTRUCTIBLE_ALCHEMISTS_STONE = { id = 44323, name = "Indestructible Alchemist's Stone" },
+  MIGHTY_ALCHEMISTS_STONE = { id = 44324, name = "Mighty Alchemist's Stone" },
   MERCURIAL_STONE = { id = 31080, name = "Mercurial Stone" },
   RUNED_FEL_IRON_ROD = { id = 22461, name = "Runed Fel Iron Rod" },
   RUNED_ETERNIUM_ROD = { id = 22463, name = "Runed Eternium Rod" },
@@ -111,6 +113,19 @@ local Items = {
 }
 
 OnyxiaGold.Data.Items = Items
+
+-- Verified transmutation stones. 31080 is not in this set.
+OnyxiaGold.Data.TransmutationStones = {
+  9149,
+  13503,
+  35748,
+  35749,
+  35750,
+  35751,
+  44322,
+  44323,
+  44324,
+}
 
 local byID = {}
 for _, def in pairs(Items) do

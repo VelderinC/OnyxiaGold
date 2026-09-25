@@ -17,11 +17,29 @@ local function addPlace(rows, place, map, actions)
     count = tonumber(count) or 0
     if itemID and count > 0 then
       local meta = OnyxiaGold.ItemInfo and OnyxiaGold.ItemInfo:Get(itemID) or nil
-      local disp = OnyxiaGold.AssetClassifier:Disposition(itemID, count, meta, actions)
+      local disp = OnyxiaGold.AssetClassifier:Disposition(itemID, count, meta, actions, place)
       local name = meta and meta.name or (OnyxiaGold.Data.GetItemName and OnyxiaGold.Data.GetItemName(itemID)) or tostring(itemID)
-      local worthText = "Worth unknown."
-      if disp.worth and OnyxiaGold.FormatMoney then
-        worthText = "Worth " .. OnyxiaGold.FormatMoney(disp.worth) .. "."
+      local unit = disp.worth
+      local total = nil
+      if unit and count then
+        total = unit * count
+      end
+      local worthText = "Unit unknown."
+      if unit and total and OnyxiaGold.FormatMoney then
+        worthText = "Unit " .. OnyxiaGold.FormatMoney(unit) .. ". Total " .. OnyxiaGold.FormatMoney(total) .. "."
+      end
+      local function money(value)
+        if not value or not OnyxiaGold.FormatMoney then
+          return nil
+        end
+        return OnyxiaGold.FormatMoney(value)
+      end
+      local exits = ""
+      if disp.floor or disp.expected or disp.intact or disp.vendor then
+        exits = " Floor " .. tostring(money(disp.floor) or "none")
+          .. ". Expected " .. tostring(money(disp.expected) or "none")
+          .. ". Sale " .. tostring(money(disp.intact) or "none")
+          .. ". Vendor " .. tostring(money(disp.vendor) or "none") .. "."
       end
       table.insert(rows, {
         itemID = itemID,
@@ -30,9 +48,10 @@ local function addPlace(rows, place, map, actions)
         place = place,
         label = disp.label,
         badge = disp.badge,
-        worth = disp.worth,
+        worth = unit,
+        totalWorth = total,
         why = disp.why,
-        tooltip = name .. " x" .. tostring(count) .. ". " .. place .. ". " .. worthText .. " " .. tostring(disp.why),
+        tooltip = name .. " x" .. tostring(count) .. ". " .. place .. ". " .. worthText .. exits .. " " .. tostring(disp.why),
       })
     end
   end
@@ -51,6 +70,19 @@ function Factory:Rows()
   addPlace(rows, "Bags", character.inventory and character.inventory.bags, actions)
   addPlace(rows, "Bank", character.bank and character.bank.items, actions)
   addPlace(rows, "Mail", character.mail and character.mail.items, actions)
+  local listings = character.auctions and character.auctions.listings
+  if type(listings) == "table" then
+    local listed = {}
+    for i = 1, table.getn(listings) do
+      local row = listings[i]
+      local itemID = row and tonumber(row.itemID)
+      local count = row and tonumber(row.count) or 0
+      if itemID and count > 0 then
+        listed[itemID] = (listed[itemID] or 0) + count
+      end
+    end
+    addPlace(rows, "Listed", listed, actions)
+  end
   table.sort(rows, function(a, b)
     if a.place == b.place then
       return tostring(a.name) < tostring(b.name)

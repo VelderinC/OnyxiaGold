@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14 — Beyond gold
+
+- An off-by-default checkbox lists profitable Alchemy and Enchanting actions that cost more than deployable gold, with the cash required, the shortfall, and the profession skill when that is also short.
+
 ## 0.1.13 — Personal trade history
 
 - Record each character's buys, sales, and auction-house mail proceeds, and show them as copyable text with spent and received totals.

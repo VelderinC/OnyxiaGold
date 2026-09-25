@@ -10,8 +10,11 @@ Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials
 - Known recipes are profession-scoped. A complete profession scan replaces that profession's set. Saved flat sets migrate (database v4).
 - A mailbox with unloaded mail persists `snapshotComplete = false` plus `visibleCount` and `totalCount`. The UI does not present that subtotal as exact.
 - Own auctions persist `shown`, `total`, and `complete` (`shown >= total`). An incomplete owner list shows Listed as approximate.
-- Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`. `sensibleCrafts` does not yet apply an output-liquidity model.
-- `SessionState` rebuilds on each plan. A selected action reserves its cash, the bag units it uses, and the auction units it would buy. The next action sees what remains. The saved market snapshot is not modified.
+- Craft capacity is split into `marketProfitableCrafts`, `physicalPossibleCrafts`, `affordableCrafts`, `capabilityAllowedCrafts`, `executableCrafts`, and `sensibleCrafts`.
+- `sensibleCrafts` is a crude output cap. A plan will not add more output units than the visible buyout book already shows. The tooltip calls it a cap, not a liquidity model. It is not a sale rate.
+- `SessionState` rebuilds on each plan. A selected action reserves its cash, the bag units it uses, and the auction units it would buy. The next action sees what remains, including output units already planned. The saved market snapshot is not modified.
+- Dream Shard combines one way: 3 Small Dream Shards into 1 Dream Shard. The addon does not recommend a split.
+- Prismatic shards stay a priced pair. They are not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented.
 
 ## 0.1.2 — Character State & Capital Awareness
 

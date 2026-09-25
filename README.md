@@ -155,8 +155,8 @@ Hover the capital line for the portfolio tooltip. Hover an action for cash vs ec
 | Greater Eternal Essence ↔ 3 Lesser Eternal Essence | Item-use; no profession |
 | Greater Planar Essence ↔ 3 Lesser Planar Essence | Item-use; no profession |
 | Greater Cosmic Essence ↔ 3 Lesser Cosmic Essence | Item-use; no profession |
-| 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Item-use; no profession |
-| 3 Small Dream Shards ↔ 1 Dream Shard | Item-use; no profession |
+| 3 Small Prismatic Shards ↔ 1 Large Prismatic Shard | Priced only. Not an action until the Enchanting recipe and the Runed Fel Iron Rod are represented |
+| 3 Small Dream Shards → 1 Dream Shard | Item-use. A Dream Shard does not split |
 | 8 Saronite Bars → 1 Titanium Bar | Alchemy 395, recipe 60350. 440 is difficulty colour, not the requirement. Transmute Master is an EV modifier (1.20x), not a craft gate |
 
 Market opportunities require first-craft expected profit > 0 after AH cut. The action list then keeps only what this character can execute **now** with current gold, bags, and recipes. Expected sale proceeds are never treated as cash for the next buy.
@@ -172,13 +172,13 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 - Owner-auction snapshot does not page. If `shown < total`, Listed is approximate (`complete = false`)
 - If the mailbox has not loaded every message, Mail Ready and Pending are approximate (`snapshotComplete = false`)
 - Known recipes are replaced per profession on a complete tradeskill scan. They are not appended forever
-- `sensibleCrafts` is not yet reduced by output liquidity
+- `sensibleCrafts` is a crude cap against the visible output book, not a liquidity model or a sale rate
 - Bank counts are last-open snapshots
 - Recipe knowledge is only as current as the last tradeskill window scan
 - No disenchant EV tables yet (prepared for v0.2.0; Full Scan is the intended feed)
 - Recursive crafting, farm GPH, and automated buy/post/loot are out of scope
 - Neutral AH is not partitioned yet (player faction market only)
-- The planner reserves cash, bag units, and a cloned auction book inside one plan. It does not yet model output liquidity, and bank stock is still not bag stock.
+- The planner reserves cash, bag units, and a cloned auction book inside one plan. Planned output is also capped to the visible buyout book. Bank stock is still not bag stock.
 - DE skill-floor table is centralized but must be confirmed on Warmane before buy recommendations
 
 ## Sharing logs
@@ -227,7 +227,7 @@ Market opportunities require first-craft expected profit > 0 after AH cut. The a
 
 ## Future roadmap
 
-1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth. Still ahead: Factory Mail, Factory Inventory.
+1. **0.1.3** — Factory Operations. Phase A corrects skill, depth, after-mail reserve, recipe snapshots, partial mail/auctions, and capacity fields. Phase B reserves session cash, bags, and cloned auction depth, caps planned output to the visible book, keeps Dream Shard one-way, and leaves prismatic shards off the action list. Still ahead: Factory Mail, Factory Inventory, the epic-gem cooldown picker, and disenchant EV.
 2. **v0.2.0** — Full disenchant expected-value engine (weapon vs armour, iLevel, quality; Full Scan feed)
 3. **v0.2.1+** — Enchanting conversions: Abyssal Shatter, Void Shatter (confirmed 3.3.5 data), vellum scrolls
 4. **v0.3+** — Recursive capability-aware transformation graph (GLOBAL paths vs EXECUTABLE paths)

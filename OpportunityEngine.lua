@@ -48,6 +48,8 @@ local function newOpportunity(fields)
     outputCount = fields.outputCount,
     recipeId = fields.recipeId,
     isExpectedValue = fields.isExpectedValue and true or false,
+    -- false means the relationship is priced and must not become an action.
+    actionable = fields.actionable ~= false,
   }
 end
 
@@ -240,6 +242,7 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     oldestDataAge = ages,
     saleUnit = saleUnit,
     requirements = extra and extra.requirements or nil,
+    actionable = extra and extra.actionable,
     inputCount = sourceCount,
     outputCount = targetCount,
     recipeId = extra and extra.recipeId or nil,
@@ -264,7 +267,7 @@ function Engine:AppendConversionOpportunities(out, def)
       def.targetItemID,
       def.targetCount,
       def.notesForward,
-      { requirements = def.requirements, recipeId = def.id }
+      { requirements = def.requirements, recipeId = def.id, actionable = def.actionable }
     )
   end)
   if ok and opp then
@@ -284,7 +287,7 @@ function Engine:AppendConversionOpportunities(out, def)
         def.sourceItemID,
         def.sourceCount,
         def.notesReverse,
-        { requirements = def.requirements, recipeId = def.id }
+        { requirements = def.requirements, recipeId = def.id, actionable = def.actionable }
       )
     end)
     if ok2 and reverse then
@@ -346,8 +349,14 @@ function Engine:Refresh()
   self:CollectFrom(OnyxiaGold.Engines.Farming, "Farming")
   self:Rank(self.results)
   local n = table.getn(self.results)
-  if n > 0 then
-    local top = self.results[1]
+  local top
+  for i = 1, n do
+    if self.results[i].actionable ~= false then
+      top = self.results[i]
+      break
+    end
+  end
+  if top then
     OnyxiaGold.Log:Info("Engine", string.format(
       "%d opportunities. Top: %s first=%+d potential=%+d crafts=%s",
       n,
@@ -356,7 +365,7 @@ function Engine:Refresh()
       top.totalExpectedProfit or 0,
       tostring(top.marketProfitableCrafts or top.maxProfitableCrafts)
     ))
-  else
+  elseif n == 0 then
     OnyxiaGold.Log:Debug("Engine", "0 opportunities found")
   end
   if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then

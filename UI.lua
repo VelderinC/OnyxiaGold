@@ -449,7 +449,7 @@ function UI:ShowActionTooltip(row)
   GameTooltip:AddLine("Cash required now: " .. OnyxiaGold.FormatMoney(action.cashRequiredNow or 0), 1, 1, 1)
   GameTooltip:AddLine("Expected economic profit: " .. OnyxiaGold.FormatMoneySigned(action.expectedProfit or 0), 0.2, 1, 0.2)
   if action.crafts and action.crafts > 0 then
-    GameTooltip:AddLine("Executable crafts: " .. tostring(action.crafts), 1, 1, 1)
+    GameTooltip:AddLine("Planned crafts: " .. tostring(action.crafts), 1, 1, 1)
   end
 
   local person = action.person
@@ -472,6 +472,9 @@ function UI:ShowActionTooltip(row)
       tostring(person.executableCrafts or 0),
       tostring(person.sensibleCrafts or 0)
     ), 0.75, 0.75, 0.75)
+    if person.outputCapNote then
+      GameTooltip:AddLine(person.outputCapNote, 1, 0.82, 0.4, 1)
+    end
   end
   if opp then
     GameTooltip:AddLine(" ", 1, 1, 1)

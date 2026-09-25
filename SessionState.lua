@@ -7,6 +7,8 @@
   The next action sees what remains.
 
   The saved market snapshot is never written. Quotes walk the clone only.
+  Output units already planned are remembered here so the next action sees
+  a thinner visible book. That count is not a sale rate.
   Bank stock is not treated as bag stock. Cooldown groups are marked used
   for this plan only; no timing numbers are invented.
 ]]
@@ -26,6 +28,7 @@ function Session:Reset()
   self.depth = {}
   self.reserved = {}
   self.cooldowns = {}
+  self.outputUsed = {}
 end
 
 Session:Reset()
@@ -160,6 +163,20 @@ function Session:CoveredQuantity(itemID)
     return 0
   end
   return self:EnsureDepth(itemID).covered or 0
+end
+
+-- Visible output left after earlier actions in this plan. Does not write the snapshot.
+function Session:RemainingOutput(itemID, visible)
+  visible = tonumber(visible) or 0
+  itemID = tonumber(itemID)
+  if not self.active or not itemID then
+    return visible
+  end
+  local left = visible - (self.outputUsed[itemID] or 0)
+  if left < 0 then
+    left = 0
+  end
+  return left
 end
 
 function Session:CooldownUsed(group)
@@ -315,12 +332,19 @@ function Session:Reserve(spec)
   if spec.cooldown then
     self.cooldowns[spec.cooldown] = true
   end
+  local outputID = tonumber(spec.outputItemID)
+  local outputUnits = tonumber(spec.outputUnits) or 0
+  if outputID and outputUnits > 0 then
+    self.outputUsed[outputID] = (self.outputUsed[outputID] or 0) + outputUnits
+  end
   table.insert(self.reserved, {
     itemID = itemID,
     cash = cash,
     ownedUnits = ownedUnits,
     buyUnits = buyUnits,
     cooldown = spec.cooldown,
+    outputItemID = outputID,
+    outputUnits = outputUnits,
   })
   if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
     OnyxiaGold.Log:Debug("Session", string.format(

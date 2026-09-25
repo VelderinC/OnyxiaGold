@@ -17,7 +17,9 @@
   Capacity fields stay separate:
     marketProfitableCrafts, physicalPossibleCrafts, affordableCrafts,
     capabilityAllowedCrafts, executableCrafts, sensibleCrafts.
-  sensibleCrafts does not yet apply an output-liquidity model.
+  sensibleCrafts is a crude output cap: do not plan more output units than
+  the visible buyout book already shows. It is not a liquidity model and
+  it is not a sale rate.
 
   Candidate classes (ranking remains data-driven, not a hard Alchemy > Enchanting order):
   zero-cash owned transforms, high-EV Alchemy, Enchanting destruction (v0.2.0),
@@ -51,6 +53,47 @@ local function meetsThreshold(profit)
     return false
   end
   return true
+end
+
+-- Crude stop. Not a sale rate and not a claim about how fast goods sell.
+local OUTPUT_CAP_NOTE = "Output cap, not a liquidity model. Planned output is cut to the visible buyout book."
+
+local function outputPerCraft(opp)
+  local count = tonumber(opp.outputCount) or 1
+  if count < 1 then
+    count = 1
+  end
+  local expected = tonumber(opp.expectedOutput) or 1
+  if expected <= 0 then
+    expected = 1
+  end
+  return count * expected
+end
+
+-- Returns the craft count that still fits the visible output book, and whether it was cut.
+local function cappedCrafts(opp, executable)
+  executable = tonumber(executable) or 0
+  local outID = opp.outputItemIDs and opp.outputItemIDs[1]
+  if not outID or executable <= 0 then
+    return executable, false
+  end
+  local visible = tonumber(opp.outputMarketQuantity) or 0
+  local session = OnyxiaGold.SessionState
+  if session and session.IsActive and session:IsActive() and session.RemainingOutput then
+    visible = session:RemainingOutput(outID, visible)
+  end
+  local per = outputPerCraft(opp)
+  if executable * per <= visible then
+    return executable, false
+  end
+  local allowed = math.floor(visible / per)
+  if allowed < 0 then
+    allowed = 0
+  end
+  if allowed > executable then
+    allowed = executable
+  end
+  return allowed, true
 end
 
 -- cash, economicInput, ownedValue, complete
@@ -180,6 +223,8 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     missingInputCost = 0,
     economicProfit = 0,
     reason = cap.reason,
+    outputCapped = false,
+    outputCapNote = nil,
   }
 
   local function commit(n)
@@ -205,6 +250,15 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     person.economicProfit = profit
     person.roi = (cash > 0) and (profit / cash) or (ownedValue > 0 and (profit / ownedValue) or 0)
     return true
+  end
+
+  if opp.actionable == false then
+    person.state = "NOT_ACTIONABLE"
+    person.reason = "Not actionable until the recipe and the tool are represented"
+    person.capabilityAllowedCrafts = 0
+    person.executableCrafts = 0
+    person.sensibleCrafts = 0
+    return person
   end
 
   if opp.oldestDataAge and opp.oldestDataAge > (OnyxiaGold.Config.FullScanStaleSeconds or 3600) then
@@ -248,15 +302,39 @@ function Planner:Personalize(opp, deployable, afterMailDeployable)
     execCap = capabilityAllowed
   end
   if execCap > 0 then
+    local chosen
     local n = execCap
     while n > 0 do
       local profit = commit(n)
       if profit and profit > 0 and meetsThreshold(profit) then
-        accept(n)
+        chosen = n
+        break
+      end
+      n = n - 1
+    end
+    if chosen then
+      local sensible, capped = cappedCrafts(opp, chosen)
+      if sensible >= 1 and accept(sensible) then
+        person.executableCrafts = chosen
+        if capped then
+          person.outputCapped = true
+          person.outputCapNote = OUTPUT_CAP_NOTE
+        end
         person.state = "ACTIONABLE_NOW"
         return person
       end
-      n = n - 1
+      person.executableCrafts = chosen
+      person.sensibleCrafts = 0
+      if capped then
+        person.outputCapped = true
+        person.outputCapNote = OUTPUT_CAP_NOTE
+        person.state = "OUTPUT_CAPPED"
+        person.reason = OUTPUT_CAP_NOTE
+      else
+        person.state = "UNPROFITABLE"
+        person.reason = "Economic profit <= 0 after opportunity cost"
+      end
+      return person
     end
     person.state = "UNPROFITABLE"
     person.reason = "Economic profit <= 0 after opportunity cost"
@@ -380,12 +458,19 @@ function Planner:ReserveSelected(person)
   end
   local toBuy = needed - fromOwned
   local cooldown = opp.requirements and opp.requirements.cooldown
+  local outputID = opp.outputItemIDs and opp.outputItemIDs[1]
+  local outputUnits = 0
+  if outputID then
+    outputUnits = crafts * outputPerCraft(opp)
+  end
   return session:Reserve({
     itemID = itemID,
     cash = person.cashRequiredNow or 0,
     ownedUnits = fromOwned,
     buyUnits = toBuy,
     cooldown = cooldown,
+    outputItemID = outputID,
+    outputUnits = outputUnits,
   })
 end
 
@@ -487,7 +572,9 @@ function Planner:Refresh()
         or person.state == "UNKNOWN_RECIPE_STATE"
         or person.state == "STALE_DATA"
         or person.state == "UNPROFITABLE"
-        or person.state == "COOLDOWN_RESERVED" then
+        or person.state == "COOLDOWN_RESERVED"
+        or person.state == "OUTPUT_CAPPED"
+        or person.state == "NOT_ACTIONABLE" then
         table.insert(self.locked, person)
       end
     end

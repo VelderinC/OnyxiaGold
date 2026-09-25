@@ -23,7 +23,7 @@ local Items = {
   LESSER_COSMIC_ESSENCE = { id = 34056, name = "Lesser Cosmic Essence" },
   GREATER_COSMIC_ESSENCE = { id = 34055, name = "Greater Cosmic Essence" },
 
-  -- Shards (3 Small <-> 1 Large)
+  -- Prismatic shards are a priced pair. Dream Shards combine one way.
   SMALL_PRISMATIC_SHARD = { id = 22448, name = "Small Prismatic Shard" },
   LARGE_PRISMATIC_SHARD = { id = 22449, name = "Large Prismatic Shard" },
   SMALL_DREAM_SHARD = { id = 34053, name = "Small Dream Shard" },

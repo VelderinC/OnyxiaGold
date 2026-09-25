@@ -16,7 +16,8 @@ OnyxiaGold.Data = OnyxiaGold.Data or {}
 
 local I = OnyxiaGold.Data.Items
 
--- Reversible 1 Greater <-> 3 Lesser (and 3 Small <-> 1 Large) conversions.
+-- Essence pairs are reversible item-use conversions.
+-- Dream Shard combines one way. Prismatic shards stay a priced pair, not an action.
 OnyxiaGold.Data.Conversions = {
   {
     id = "greater_eternal_to_lesser",
@@ -69,10 +70,13 @@ OnyxiaGold.Data.Conversions = {
     targetItemID = I.LARGE_PRISMATIC_SHARD.id,
     targetCount = 1,
     reversible = true,
+    -- Both directions stay priced. Neither is an action until the Enchanting
+    -- spell and the Runed Fel Iron Rod are represented.
+    actionable = false,
     nameForward = "Small Prismatic → Large Prismatic",
     nameReverse = "Large Prismatic → Small Prismatic",
-    notesForward = "3 Small convert into 1 Large. Item-use conversion; no profession required.",
-    notesReverse = "1 Large converts into 3 Small. Item-use conversion; no profession required.",
+    notesForward = "Market relationship only. Enchanting recipe; needs a Runed Fel Iron Rod. Not an action until that recipe and the rod are represented.",
+    notesReverse = "Market relationship only. Enchanting recipe; needs a Runed Fel Iron Rod. Not an action until that recipe and the rod are represented.",
   },
   {
     id = "small_dream_to_dream",
@@ -82,11 +86,9 @@ OnyxiaGold.Data.Conversions = {
     sourceCount = 3,
     targetItemID = I.DREAM_SHARD.id,
     targetCount = 1,
-    reversible = true,
+    reversible = false,
     nameForward = "Small Dream Shard → Dream Shard",
-    nameReverse = "Dream Shard → Small Dream Shard",
-    notesForward = "3 Small convert into 1 Dream Shard. Item-use conversion; no profession required.",
-    notesReverse = "1 Dream Shard converts into 3 Small. Item-use conversion; no profession required.",
+    notesForward = "3 Small Dream Shards combine into 1 Dream Shard. Item-use. A Dream Shard does not split.",
   },
 }
 

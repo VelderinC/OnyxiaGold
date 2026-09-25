@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.20 — One no-cooldown craft
+
+- Arcanite, Primal Might, and Elemental Fire are one comparison. The row casts the winner once and names the gold given up by skipping the runner-up. They are not on the 20-hour cooldown.
+- Elemental Fire stays three, with no Transmute Master multiplier. Arcanite shows 2 seconds, Primal Might 5, Elemental Fire 25. Skyflare's cast time stays blank.
+
 ## 0.1.19 — Void Shatter floor
 
 - Void Shatter is one Void Crystal into two Large Prismatic Shards, one craft, and only when the Runed Eternium Rod is on the character and the recipe is known. If selling the crystal leaves more, the row says sell.

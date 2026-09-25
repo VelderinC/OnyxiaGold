@@ -298,7 +298,7 @@ function UI:Create()
       row:SetPoint("TOP", rows[i - 1], "BOTTOM", 0, 0)
     end
 
-    if math.mod(i, 2) == 0 then
+    if i % 2 == 0 then
       local bg = row:CreateTexture(nil, "BACKGROUND")
       bg:SetAllPoints(row)
       bg:SetTexture(1, 1, 1, 0.035)

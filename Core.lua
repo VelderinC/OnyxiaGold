@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.5"
+OnyxiaGold.Version = "0.1.6"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -94,8 +94,8 @@ function OnyxiaGold.FormatMoney(copper)
   end
   copper = math.floor(copper + 0.5)
   local g = math.floor(copper / COPPER_PER_GOLD)
-  local s = math.floor(math.mod(copper, COPPER_PER_GOLD) / COPPER_PER_SILVER)
-  local c = math.mod(copper, COPPER_PER_SILVER)
+  local s = math.floor((copper % COPPER_PER_GOLD) / COPPER_PER_SILVER)
+  local c = copper % COPPER_PER_SILVER
   local text
   if g > 0 then
     text = string.format("%d|cffffd70ag|r %02d|cffc7c7cfs|r %02d|cffeda55fc|r", g, s, c)
@@ -133,7 +133,7 @@ function OnyxiaGold.FormatGoldShort(copper)
   end
   copper = math.floor(copper + 0.5)
   local g = math.floor(copper / COPPER_PER_GOLD)
-  local s = math.floor(math.mod(copper, COPPER_PER_GOLD) / COPPER_PER_SILVER)
+  local s = math.floor((copper % COPPER_PER_GOLD) / COPPER_PER_SILVER)
   local text
   if g > 0 and s > 0 then
     text = string.format("%dg %ds", g, s)
@@ -187,12 +187,12 @@ function OnyxiaGold.FormatAge(seconds)
     return tostring(seconds) .. "s"
   end
   local m = math.floor(seconds / 60)
-  local s = math.mod(seconds, 60)
+  local s = seconds % 60
   if m < 60 then
     return string.format("%dm %ds", m, s)
   end
   local h = math.floor(m / 60)
-  m = math.mod(m, 60)
+  m = m % 60
   return string.format("%dh %dm", h, m)
 end
 

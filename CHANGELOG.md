@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 — Version watermark
+
+- Always-visible top-left watermark shows OnyxiaGold and the TOC version.
+
 ## 0.1.3 — Factory Operations, Phase A and Phase B
 
 Phase A corrects planner and snapshot debt. Phase B reserves cash, bag materials, and cloned auction depth inside one session plan. Factory Mail and Factory Inventory are not in this version.

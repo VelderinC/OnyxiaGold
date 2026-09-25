@@ -2,7 +2,7 @@
 ## Title: OnyxiaGold
 ## Notes: Economic optimisation and Auction House analysis for Warmane Onyxia
 ## Author: Charles / Velderin
-## Version: 0.1.23
+## Version: 0.1.24
 ## SavedVariables: OnyxiaGoldDB
 ## DefaultState: enabled
 
@@ -39,6 +39,7 @@ SessionState.lua
 ActionPlanner.lua
 AuctionStop.lua
 TradeLog.lua
+ExternalMarket.lua
 UI.lua
 BagSort.lua
 Watermark.lua

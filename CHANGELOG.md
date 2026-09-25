@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.24 — External market snapshot
+
+- `tools/OnyxiaGoldSync` downloads the Onyxia Alliance snapshot from ah.nerfed.net and writes a gitignored Lua file. The addon still loads when that file is missing.
+- A newer live scan is left as it is. External prices are not a buy, and a download that is not the Alliance snapshot does not replace a valid file.
+
 ## 0.1.23 — Factory inventory
 
 - Held switches the list to bags, bank, and mail. Each item has one disposition, a text badge, and a colour. The tooltip says what it is worth and why.

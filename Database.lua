@@ -1,8 +1,9 @@
 --[[
   OnyxiaGold.Database
-  SavedVariables, realm/faction markets, migrations, full vs partial writes.
+  SavedVariables, realm/faction markets, character snapshots, migrations.
 
   DB_VERSION 2 partitions latest/history/scans by market key "Realm|Faction".
+  DB_VERSION 3 adds characters["Realm|Faction|Name"] observation snapshots.
   Depth lives only on current latest records. History stores compact stats.
 ]]
 
@@ -37,8 +38,10 @@ function DB:DefaultSettings()
   return {
     debug = false,
     transmuteMaster = false,
+    transmuteMasterOverride = false,
     auctionHouseCut = nil,
     useGetAll = false,
+    capitalReservePercent = 0.10,
   }
 end
 
@@ -46,6 +49,8 @@ function DB:EmptyRoot()
   return {
     version = OnyxiaGold.DB_VERSION,
     markets = {},
+    characters = {},
+    itemMeta = {},
     settings = self:DefaultSettings(),
     log = { session = 0, lines = {} },
   }
@@ -77,6 +82,12 @@ function DB:EnsureShape(db)
   end
   for key, market in pairs(db.markets) do
     db.markets[key] = self:EnsureMarketShape(market)
+  end
+  if type(db.characters) ~= "table" then
+    db.characters = {}
+  end
+  if type(db.itemMeta) ~= "table" then
+    db.itemMeta = {}
   end
   if type(db.log) ~= "table" then
     db.log = { session = 0, lines = {} }
@@ -125,6 +136,90 @@ function DB:GetMarket(key)
   return self:EnsureMarketShape(OnyxiaGoldDB.markets[key])
 end
 
+function DB:EmptyCharacter()
+  return {
+    identity = {},
+    professions = {},
+    knownRecipes = {},
+    recipeScans = {},
+    specialisations = {},
+    inventory = { bags = {}, timestamp = nil },
+    bank = { items = {}, timestamp = nil },
+    mail = {
+      claimableGold = 0,
+      pendingGold = 0,
+      snapshotTimestamp = nil,
+      mailboxLastOpened = nil,
+    },
+    auctions = {
+      listings = {},
+      askingValue = 0,
+      expectedNet = 0,
+      currentBids = 0,
+      timestamp = nil,
+    },
+    capital = {
+      liquid = 0,
+      timestamp = nil,
+    },
+    stateTimestamps = {},
+  }
+end
+
+function DB:EnsureCharacterShape(rec)
+  local empty = self:EmptyCharacter()
+  if type(rec) ~= "table" then
+    return empty
+  end
+  rec.identity = type(rec.identity) == "table" and rec.identity or {}
+  rec.professions = type(rec.professions) == "table" and rec.professions or {}
+  rec.knownRecipes = type(rec.knownRecipes) == "table" and rec.knownRecipes or {}
+  rec.recipeScans = type(rec.recipeScans) == "table" and rec.recipeScans or {}
+  rec.specialisations = type(rec.specialisations) == "table" and rec.specialisations or {}
+  rec.inventory = type(rec.inventory) == "table" and rec.inventory or empty.inventory
+  if type(rec.inventory.bags) ~= "table" then
+    rec.inventory.bags = {}
+  end
+  rec.bank = type(rec.bank) == "table" and rec.bank or empty.bank
+  if type(rec.bank.items) ~= "table" then
+    rec.bank.items = {}
+  end
+  rec.mail = type(rec.mail) == "table" and rec.mail or empty.mail
+  rec.auctions = type(rec.auctions) == "table" and rec.auctions or empty.auctions
+  if type(rec.auctions.listings) ~= "table" then
+    rec.auctions.listings = {}
+  end
+  rec.capital = type(rec.capital) == "table" and rec.capital or empty.capital
+  rec.stateTimestamps = type(rec.stateTimestamps) == "table" and rec.stateTimestamps or {}
+  return rec
+end
+
+-- "Onyxia|Alliance|CharacterName". Nil until name/realm/faction exist.
+function DB:GetCharacterKey()
+  local realm = GetRealmName()
+  local name = UnitName("player")
+  if not realm or realm == "" or not name or name == "" then
+    return nil
+  end
+  local faction = UnitFactionGroup("player")
+  if faction ~= "Alliance" and faction ~= "Horde" then
+    faction = "Unknown"
+  end
+  return realm .. "|" .. faction .. "|" .. name
+end
+
+function DB:GetCharacter(key)
+  self:Ensure()
+  key = key or self:GetCharacterKey()
+  if not key then
+    return nil
+  end
+  if type(OnyxiaGoldDB.characters[key]) ~= "table" then
+    OnyxiaGoldDB.characters[key] = self:EmptyCharacter()
+  end
+  return self:EnsureCharacterShape(OnyxiaGoldDB.characters[key])
+end
+
 local function snapshotLegacy(db)
   local latest = db.latest
   local history = db.history
@@ -155,6 +250,10 @@ local migrations = {
     else
       OnyxiaGold:Debug("v1 had no market data to migrate", "Database")
     end
+  end,
+  [3] = function(db)
+    db.characters = db.characters or {}
+    OnyxiaGold:Debug("v3 character snapshots enabled", "Database")
   end,
 }
 
@@ -239,11 +338,23 @@ end
 
 function DB:Reset()
   local preservedLog = OnyxiaGoldDB and OnyxiaGoldDB.log
+  local preservedChars = OnyxiaGoldDB and OnyxiaGoldDB.characters
+  local preservedSettings = OnyxiaGoldDB and OnyxiaGoldDB.settings
+  local preservedMeta = OnyxiaGoldDB and OnyxiaGoldDB.itemMeta
   OnyxiaGoldDB = self:EmptyRoot()
   if preservedLog then
     OnyxiaGoldDB.log = preservedLog
   end
-  OnyxiaGold:Warn("Price database reset; log retained", "Database")
+  if type(preservedChars) == "table" then
+    OnyxiaGoldDB.characters = preservedChars
+  end
+  if type(preservedSettings) == "table" then
+    OnyxiaGoldDB.settings = copyDefaults(preservedSettings, self:DefaultSettings())
+  end
+  if type(preservedMeta) == "table" then
+    OnyxiaGoldDB.itemMeta = preservedMeta
+  end
+  OnyxiaGold:Warn("Price database reset; log, settings, character snapshots, and item metadata retained", "Database")
 end
 
 local function compactRecord(itemID, rec, timestamp)

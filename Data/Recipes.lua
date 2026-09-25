@@ -1,6 +1,14 @@
 --[[
   Data-driven transformations.
   Economic relationships live here, not in the UI.
+
+  Factory target pair: Alchemy + Enchanting.
+  Jewelcrafting recipes may be added for GLOBAL analysis; they are not
+  personally executable on the intended Druid.
+
+  Essence/shard item-use conversions do not require Enchanting.
+  Abyssal Shatter, Void Shatter, and vellum scrolls are Enchanting-gated
+  and belong in v0.2.1+ once 3.3.5 outputs are confirmed.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -21,8 +29,8 @@ OnyxiaGold.Data.Conversions = {
     reversible = true,
     nameForward = "Greater Eternal → Lesser Eternal",
     nameReverse = "Lesser Eternal → Greater Eternal",
-    notesForward = "1 Greater converts into 3 Lesser",
-    notesReverse = "3 Lesser convert into 1 Greater",
+    notesForward = "1 Greater converts into 3 Lesser. Item-use conversion; no profession required.",
+    notesReverse = "3 Lesser convert into 1 Greater. Item-use conversion; no profession required.",
   },
   {
     id = "greater_planar_to_lesser",
@@ -35,8 +43,8 @@ OnyxiaGold.Data.Conversions = {
     reversible = true,
     nameForward = "Greater Planar → Lesser Planar",
     nameReverse = "Lesser Planar → Greater Planar",
-    notesForward = "1 Greater converts into 3 Lesser",
-    notesReverse = "3 Lesser convert into 1 Greater",
+    notesForward = "1 Greater converts into 3 Lesser. Item-use conversion; no profession required.",
+    notesReverse = "3 Lesser convert into 1 Greater. Item-use conversion; no profession required.",
   },
   {
     id = "greater_cosmic_to_lesser",
@@ -49,8 +57,8 @@ OnyxiaGold.Data.Conversions = {
     reversible = true,
     nameForward = "Greater Cosmic → Lesser Cosmic",
     nameReverse = "Lesser Cosmic → Greater Cosmic",
-    notesForward = "1 Greater converts into 3 Lesser",
-    notesReverse = "3 Lesser convert into 1 Greater",
+    notesForward = "1 Greater converts into 3 Lesser. Item-use conversion; no profession required.",
+    notesReverse = "3 Lesser convert into 1 Greater. Item-use conversion; no profession required.",
   },
   {
     id = "small_prismatic_to_large",
@@ -63,8 +71,8 @@ OnyxiaGold.Data.Conversions = {
     reversible = true,
     nameForward = "Small Prismatic → Large Prismatic",
     nameReverse = "Large Prismatic → Small Prismatic",
-    notesForward = "3 Small convert into 1 Large",
-    notesReverse = "1 Large converts into 3 Small",
+    notesForward = "3 Small convert into 1 Large. Item-use conversion; no profession required.",
+    notesReverse = "1 Large converts into 3 Small. Item-use conversion; no profession required.",
   },
   {
     id = "small_dream_to_dream",
@@ -77,8 +85,8 @@ OnyxiaGold.Data.Conversions = {
     reversible = true,
     nameForward = "Small Dream Shard → Dream Shard",
     nameReverse = "Dream Shard → Small Dream Shard",
-    notesForward = "3 Small convert into 1 Dream Shard",
-    notesReverse = "1 Dream Shard converts into 3 Small",
+    notesForward = "3 Small convert into 1 Dream Shard. Item-use conversion; no profession required.",
+    notesReverse = "1 Dream Shard converts into 3 Small. Item-use conversion; no profession required.",
   },
 }
 
@@ -94,6 +102,12 @@ OnyxiaGold.Data.Transmutes = {
       { itemID = I.TITANIUM_BAR.id, count = 1 },
     },
     supportsTransmuteMastery = true,
-    notes = "Expected output is not guaranteed; Transmute Master uses a 1.20 EV multiplier",
+    requirements = {
+      profession = "Alchemy",
+      minimumSkill = 440,
+      recipeSpellID = 60350,
+      specialisationOptional = "Transmutation",
+    },
+    notes = "Expected output is not guaranteed; Transmute Master is an EV modifier, not a craft gate",
   },
 }

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2 — Character State & Capital Awareness
+
+- Personal economic state: liquid gold, mail ready, pending AH invoices, listed auctions, bag/bank materials
+- Character snapshots keyed by `Realm|Faction|Name` (database v3)
+- Legacy 3.3.5 profession detection (`GetNumSkillLines` / `GetSkillLineInfo`)
+- Known-recipe scans when a tradeskill window is opened
+- Transmutation Master detection (spell 28672); Force TM remains a manual override
+- Working-capital reserve (default 10%) so the planner does not spend the last copper
+- Owned bag materials reduce **cash required** but keep **economic opportunity cost**
+- Greedy ActionPlanner: sequential capital, no credit for unsold crafts, pending gold is not spendable
+- Main window: compact personal header + **What to do now** list
+- Factory target pair: **Alchemy 450 / Transmutation Master + Enchanting 450** (detected, not assumed)
+- Jewelcrafting kept as generic GLOBAL capability; not the intended factory profession
+- Disenchant EV engine prepared (skill floors, item metadata cache) but not implemented
+- No automated mail loot, no automated AH buying
+
 ## 0.1.1 — Reliable Market Data
 
 - Depth-aware acquisition pricing (compact buyout order book)

@@ -5,8 +5,8 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.1"
-OnyxiaGold.DB_VERSION = 2
+OnyxiaGold.Version = "0.1.2"
+OnyxiaGold.DB_VERSION = 3
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
 OnyxiaGold.Engines = OnyxiaGold.Engines or {}
@@ -33,6 +33,14 @@ OnyxiaGold.Config = {
   FullScanStaleSeconds = 3600,
   -- Experimental. Warmane getAll is untested; leave false.
   useGetAll = false,
+  -- Planner never deploys this fraction of liquid gold.
+  CapitalReservePercent = 0.10,
+  MailStaleSeconds = 600,
+  AuctionStaleSeconds = 600,
+  BankStaleSeconds = 86400,
+  RecipeScanStaleSeconds = 86400,
+  -- Optional abundance filter (copper). Nil disables it.
+  MinimumAbsoluteProfit = nil,
 }
 
 local COPPER_PER_SILVER = 100
@@ -116,6 +124,58 @@ function OnyxiaGold.FormatPercent(ratio)
   return string.format("%d%%", math.floor(ratio * 100 + 0.5))
 end
 
+function OnyxiaGold.FormatGoldShort(copper)
+  copper = tonumber(copper) or 0
+  local negative = copper < 0
+  if negative then
+    copper = -copper
+  end
+  copper = math.floor(copper + 0.5)
+  local g = math.floor(copper / COPPER_PER_GOLD)
+  local s = math.floor(math.mod(copper, COPPER_PER_GOLD) / COPPER_PER_SILVER)
+  local text
+  if g > 0 and s > 0 then
+    text = string.format("%dg %ds", g, s)
+  elseif g > 0 then
+    text = string.format("%dg", g)
+  elseif s > 0 then
+    text = string.format("%ds", s)
+  else
+    text = string.format("%dc", copper)
+  end
+  if negative then
+    return "-" .. text
+  end
+  return text
+end
+
+function OnyxiaGold.AgeSeconds(timestamp)
+  timestamp = tonumber(timestamp)
+  if not timestamp then
+    return nil
+  end
+  local age = time() - timestamp
+  if age < 0 then
+    age = 0
+  end
+  return age
+end
+
+-- live / yellow (moderate) / orange (very stale)
+function OnyxiaGold.FreshnessRGB(ageSeconds, staleAfter, veryStaleAfter)
+  if ageSeconds == nil then
+    return 0.55, 0.55, 0.55
+  end
+  staleAfter = staleAfter or 600
+  veryStaleAfter = veryStaleAfter or (staleAfter * 6)
+  if ageSeconds < staleAfter then
+    return 0.85, 0.85, 0.85
+  elseif ageSeconds < veryStaleAfter then
+    return 1, 0.85, 0.35
+  end
+  return 1, 0.55, 0.2
+end
+
 function OnyxiaGold.FormatAge(seconds)
   seconds = tonumber(seconds) or 0
   if seconds < 0 then
@@ -172,9 +232,19 @@ function OnyxiaGold:Warn(message, module)
   end
 end
 
+function OnyxiaGold:IsTransmuteMasterOverride()
+  return OnyxiaGoldDB and OnyxiaGoldDB.settings and OnyxiaGoldDB.settings.transmuteMasterOverride
+end
+
 function OnyxiaGold:IsTransmuteMaster()
   if OnyxiaGold.Data.OnyxiaOverrides and OnyxiaGold.Data.OnyxiaOverrides.transmuteMaster ~= nil then
     return OnyxiaGold.Data.OnyxiaOverrides.transmuteMaster and true or false
+  end
+  if self:IsTransmuteMasterOverride() then
+    return OnyxiaGoldDB.settings.transmuteMaster and true or false
+  end
+  if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.HasSpecialisation then
+    return OnyxiaGold.Capabilities:HasSpecialisation("Transmutation")
   end
   if OnyxiaGoldDB and OnyxiaGoldDB.settings then
     return OnyxiaGoldDB.settings.transmuteMaster and true or false
@@ -237,11 +307,13 @@ function OnyxiaGold:HandleSlash(msg)
     self.UI:Refresh()
   elseif msg == "master" then
     OnyxiaGold.Database:Ensure()
-    OnyxiaGoldDB.settings.transmuteMaster = not OnyxiaGoldDB.settings.transmuteMaster
-    if OnyxiaGoldDB.settings.transmuteMaster then
-      self:Print("Transmute Master expected output enabled (x" .. tostring(self:GetTransmuteMultiplier()) .. ").")
+    local override = not OnyxiaGoldDB.settings.transmuteMasterOverride
+    OnyxiaGoldDB.settings.transmuteMasterOverride = override
+    if override then
+      OnyxiaGoldDB.settings.transmuteMaster = true
+      self:Print("Transmute Master manual override ON (forced). Detection is ignored until you uncheck Force TM.")
     else
-      self:Print("Transmute Master expected output disabled (x1.00).")
+      self:Print("Transmute Master manual override OFF. Using spellbook detection.")
     end
     self.OpportunityEngine:Refresh()
   else
@@ -274,6 +346,9 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1)
     end
     if OnyxiaGold.Log and OnyxiaGold.Log.StartSession then
       OnyxiaGold.Log:StartSession()
+    end
+    if OnyxiaGold.CharacterState and OnyxiaGold.CharacterState.OnLogin then
+      OnyxiaGold.CharacterState:OnLogin()
     end
     OnyxiaGold.UI:Create()
     OnyxiaGold:Print("v" .. OnyxiaGold.Version .. " loaded. Type /og to open, /og log to copy diagnostics.")

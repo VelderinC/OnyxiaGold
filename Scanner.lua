@@ -4,6 +4,9 @@
   (empty-name page walk). 3.3.5a QueryAuctionItems has no exact-match flag;
   Quick Scan filters returned rows by expected item ID.
 
+  Quick Scan covers commodities. Full Scan is also the future feed for
+  green/blue/purple disenchant opportunity discovery (v0.2.0).
+
   QueryAuctionItems(name, minLevel, maxLevel, invTypeIndex, classIndex,
                     subclassIndex, page, isUsable, qualityIndex [, getAll])
 ]]

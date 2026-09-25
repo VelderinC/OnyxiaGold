@@ -1,7 +1,14 @@
 --[[
   Crafting graph placeholder.
-  Phase 3 will recursively cost intermediates from raw materials
-  rather than trusting the AH price of every crafted step.
+  Recursive costing is later (v0.3+).
+
+  Jewelcrafting cuts and Tailoring shuffles belong in the GLOBAL graph.
+  They are ACTIONABLE_NOW only when Capabilities:CanExecute succeeds
+  for the logged-in character. The intended Druid has Alchemy + Enchanting,
+  so JC/Tailoring crafts are GLOBAL_ONLY / LOCKED_PROFESSION.
+
+  An already-listed crafted item (e.g. a Netherweave bracer on the AH)
+  may still be a personal Disenchant input.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}

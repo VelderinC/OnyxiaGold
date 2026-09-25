@@ -49,9 +49,22 @@ function Transmute:Evaluate(def)
   local net = OnyxiaGold:ApplyAuctionHouseCut(expectedGross)
 
   local firstCost = prices:GetAcquisitionCost(inputID, inCount)
+  local owned = 0
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
+    owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(inputID)
+  end
   if not firstCost or firstCost <= 0 then
-    OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": cannot fill first craft")
-    return nil
+    if owned >= inCount then
+      local unit = prices:GetLiquidationPrice(inputID)
+      if not unit or unit <= 0 then
+        OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": no AH fill and no liquidation value")
+        return nil
+      end
+      firstCost = unit * inCount
+    else
+      OnyxiaGold.Log:Debug("Transmute", "skip " .. tostring(def.name) .. ": cannot fill first craft")
+      return nil
+    end
   end
 
   local firstProfit = net - firstCost
@@ -65,7 +78,14 @@ function Transmute:Evaluate(def)
 
   local batch = prices:GetMaxProfitableBatches(inputID, inCount, net)
   local crafts = batch and batch.batches or 1
-  local totalProfit = batch and batch.totalProfit or firstProfit
+  local ownedCrafts = math.floor(owned / inCount)
+  if ownedCrafts > crafts then
+    crafts = ownedCrafts
+  end
+  local totalProfit = batch and batch.totalProfit or (firstProfit * crafts)
+  if not batch and ownedCrafts > 1 then
+    totalProfit = firstProfit * ownedCrafts
+  end
   local avgProfit = crafts > 0 and math.floor(totalProfit / crafts) or firstProfit
   local inputQty = prices:GetBuyoutQuantity(inputID)
   local outputQty = prices:GetBuyoutQuantity(outputID)
@@ -119,6 +139,11 @@ function Transmute:Evaluate(def)
     oldestDataAge = ages,
     expectedOutput = expectedOutput,
     saleUnit = saleUnit,
+    requirements = def.requirements,
+    inputCount = inCount,
+    outputCount = outCount,
+    recipeId = def.id,
+    isExpectedValue = expectedOutput ~= 1,
   })
 end
 

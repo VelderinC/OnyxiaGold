@@ -41,6 +41,11 @@ local function newOpportunity(fields)
     oldestDataAge = fields.oldestDataAge,
     expectedOutput = fields.expectedOutput,
     saleUnit = fields.saleUnit,
+    requirements = fields.requirements,
+    inputCount = fields.inputCount,
+    outputCount = fields.outputCount,
+    recipeId = fields.recipeId,
+    isExpectedValue = fields.isExpectedValue and true or false,
   }
 end
 
@@ -111,7 +116,7 @@ function Engine:ComputeConfidence(fields)
   return conf, table.concat(notes, "; ")
 end
 
-function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID, sourceCount, targetID, targetCount, notes)
+function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID, sourceCount, targetID, targetCount, notes, extra)
   sourceID = tonumber(sourceID)
   targetID = tonumber(targetID)
   sourceCount = tonumber(sourceCount) or 0
@@ -134,12 +139,25 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
   end
 
   local firstCost = prices:GetAcquisitionCost(sourceID, sourceCount)
+  local owned = 0
+  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.GetImmediatelyAvailableCount then
+    owned = OnyxiaGold.Inventory:GetImmediatelyAvailableCount(sourceID)
+  end
   if not firstCost or firstCost <= 0 then
-    OnyxiaGold.Log:Debug("Engine", string.format(
-      "skip %s: cannot fill first conversion item=%s count=%s",
-      tostring(name), tostring(sourceID), tostring(sourceCount)
-    ))
-    return nil
+    if owned >= sourceCount then
+      local unit = prices:GetLiquidationPrice(sourceID)
+      if not unit or unit <= 0 then
+        OnyxiaGold.Log:Debug("Engine", "skip " .. tostring(name) .. ": no AH fill and no liquidation value")
+        return nil
+      end
+      firstCost = unit * sourceCount
+    else
+      OnyxiaGold.Log:Debug("Engine", string.format(
+        "skip %s: cannot fill first conversion item=%s count=%s",
+        tostring(name), tostring(sourceID), tostring(sourceCount)
+      ))
+      return nil
+    end
   end
 
   local firstProfit = net - firstCost
@@ -153,7 +171,14 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
 
   local batch = prices:GetMaxProfitableBatches(sourceID, sourceCount, net)
   local crafts = batch and batch.batches or 1
-  local totalProfit = batch and batch.totalProfit or firstProfit
+  local ownedCrafts = math.floor(owned / sourceCount)
+  if ownedCrafts > crafts then
+    crafts = ownedCrafts
+  end
+  local totalProfit = batch and batch.totalProfit or (firstProfit * crafts)
+  if not batch and ownedCrafts > 1 then
+    totalProfit = firstProfit * ownedCrafts
+  end
   local avgProfit = crafts > 0 and math.floor(totalProfit / crafts) or firstProfit
   local inputQty = prices:GetBuyoutQuantity(sourceID)
   local outputQty = prices:GetBuyoutQuantity(targetID)
@@ -203,6 +228,10 @@ function Engine:EvaluateConversionDirection(name, typeName, typeLabel, sourceID,
     outputItemIDs = { targetID },
     oldestDataAge = ages,
     saleUnit = saleUnit,
+    requirements = extra and extra.requirements or nil,
+    inputCount = sourceCount,
+    outputCount = targetCount,
+    recipeId = extra and extra.recipeId or nil,
   })
 end
 
@@ -223,7 +252,8 @@ function Engine:AppendConversionOpportunities(out, def)
       def.sourceCount,
       def.targetItemID,
       def.targetCount,
-      def.notesForward
+      def.notesForward,
+      { requirements = def.requirements, recipeId = def.id }
     )
   end)
   if ok and opp then
@@ -242,7 +272,8 @@ function Engine:AppendConversionOpportunities(out, def)
         def.targetCount,
         def.sourceItemID,
         def.sourceCount,
-        def.notesReverse
+        def.notesReverse,
+        { requirements = def.requirements, recipeId = def.id }
       )
     end)
     if ok2 and reverse then
@@ -316,6 +347,9 @@ function Engine:Refresh()
     ))
   else
     OnyxiaGold.Log:Debug("Engine", "0 opportunities found")
+  end
+  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    OnyxiaGold.ActionPlanner:Refresh()
   end
   if OnyxiaGold.UI and OnyxiaGold.UI.Refresh then
     OnyxiaGold.UI:Refresh()

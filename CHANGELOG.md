@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.27 — Bag sort order
+
+- Sort still stacks partial stacks on one click. Empty slots end up at the front, and items swap into order at the back: same item together, then class, subclass, quality, and name. If the client stops accepting moves, the next click continues.
+
 ## 0.1.26 — Button tooltips
 
 - Hovering Held, Collect Gold, or Factory Sweep says what that button does. The clicks themselves are unchanged.

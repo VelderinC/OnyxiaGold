@@ -1,10 +1,13 @@
 --[[
   OnyxiaGold.BagSort
-  One backpack click stacks partial stacks, then packs items to the back
+  One backpack click stacks partial stacks, then sorts items to the back
   of the backpack and the equipped bags. Empty slots end up at the front.
+  Occupied slots swap when an item belongs earlier or later.
   The Sort button is in the open backpack's title bar, just right of the portrait.
 
-  Swaps run inside that button click. Nothing is scheduled after it returns.
+  PickupContainerItem runs inside that button click. Nothing is scheduled
+  after it returns. If the client stops accepting moves, the click stops
+  and the next click continues the same order.
   Bank, mail, keyring, and equipped gear are not touched.
   Compatible with Lua 5.1 / WoW 3.3.5a.
 ]]
@@ -15,7 +18,10 @@ OnyxiaGold.BagSort = OnyxiaGold.BagSort or {}
 local BagSort = OnyxiaGold.BagSort
 
 local BUTTON_NAME = "OnyxiaGoldBagSortButton"
-local TOOLTIP = "Stack items and pack them to the back."
+local TOOLTIP_TITLE = "Sort"
+local TOOLTIP_BODY = "Stacks partial stacks, then sorts items to the back. Empty slots stay at the front. If the bags stop moving, click again."
+local CONTINUE_MESSAGE = "Click Sort again to continue."
+local LOCKED_MESSAGE = "A bag slot is locked. Click Sort again to continue."
 
 local function carriedBagLimit()
   return NUM_BAG_SLOTS or 4
@@ -55,6 +61,9 @@ local function copySlot(slot)
     maxStack = slot.maxStack,
     name = slot.name,
     family = slot.family,
+    className = slot.className,
+    subClass = slot.subClass,
+    quality = slot.quality,
     bagFamily = slot.bagFamily,
     bagName = slot.bagName,
     locked = slot.locked,
@@ -67,6 +76,9 @@ local function clearItem(slot)
   slot.maxStack = nil
   slot.name = nil
   slot.family = nil
+  slot.className = nil
+  slot.subClass = nil
+  slot.quality = nil
 end
 
 -- A normal bag holds every item. A specialty bag holds only a matching family.
@@ -173,20 +185,164 @@ local function stackSlots(slots, ops)
   return nil
 end
 
-local function packSlots(slots, ops)
+local function itemSnapshot(slot)
+  return {
+    itemID = slot.itemID,
+    count = slot.count,
+    maxStack = slot.maxStack,
+    name = slot.name,
+    family = slot.family,
+    className = slot.className,
+    subClass = slot.subClass,
+    quality = slot.quality,
+  }
+end
+
+local function writeItem(slot, item)
+  if not item or not item.itemID then
+    clearItem(slot)
+    return
+  end
+  slot.itemID = item.itemID
+  slot.count = item.count
+  slot.maxStack = item.maxStack
+  slot.name = item.name
+  slot.family = item.family
+  slot.className = item.className
+  slot.subClass = item.subClass
+  slot.quality = item.quality
+end
+
+local function exchangeItems(a, b)
+  local tmp = itemSnapshot(a)
+  writeItem(a, itemSnapshot(b))
+  writeItem(b, tmp)
+end
+
+-- Higher rank sits further back. Same item id compares equal, so partial
+-- stacks stay together and are never clicked onto each other.
+local function ranksBehind(a, b)
+  if a.itemID and not b.itemID then
+    return true
+  end
+  if not a.itemID or not b.itemID then
+    return false
+  end
+  local fieldsA = {
+    a.className or "",
+    a.subClass or "",
+    tonumber(a.quality) or 0,
+    a.name or "",
+    tonumber(a.itemID) or 0,
+  }
+  local fieldsB = {
+    b.className or "",
+    b.subClass or "",
+    tonumber(b.quality) or 0,
+    b.name or "",
+    tonumber(b.itemID) or 0,
+  }
+  for i = 1, 5 do
+    if fieldsA[i] ~= fieldsB[i] then
+      return fieldsA[i] > fieldsB[i]
+    end
+  end
+  return false
+end
+
+local function canPlace(src, dest)
+  if not src.itemID then
+    return false
+  end
+  if not itemFits(src, dest) then
+    return false
+  end
+  if dest.itemID and not itemFits(dest, src) then
+    return false
+  end
+  return true
+end
+
+-- Share one identity across stacks of the same item so a cache miss on one
+-- slot does not split them.
+local function itemKeyScore(slot)
+  local score = 0
+  if type(slot.className) == "string" and slot.className ~= "" then
+    score = score + 4
+  end
+  if type(slot.subClass) == "string" and slot.subClass ~= "" then
+    score = score + 2
+  end
+  if slot.quality ~= nil then
+    score = score + 1
+  end
+  return score
+end
+
+local function unifyItemKeys(slots)
+  local known = {}
   local n = table.getn(slots)
-  local writeIndex = n
-  for readIndex = n, 1, -1 do
-    local src = slots[readIndex]
-    if src.itemID then
-      if readIndex ~= writeIndex then
-        local dest = slots[writeIndex]
-        if dest.itemID then
-          return "Could not pack into an occupied slot, so the sort stopped."
-        end
-        if not itemFits(src, dest) then
-          return cannotHoldMessage(src, dest)
-        end
+  for i = 1, n do
+    local slot = slots[i]
+    if slot.itemID then
+      local prev = known[slot.itemID]
+      if not prev or itemKeyScore(slot) > itemKeyScore(prev) then
+        known[slot.itemID] = slot
+      end
+    end
+  end
+  for i = 1, n do
+    local slot = slots[i]
+    local src = slot.itemID and known[slot.itemID]
+    if src and src ~= slot then
+      if (type(slot.className) ~= "string" or slot.className == "") and type(src.className) == "string" and src.className ~= "" then
+        slot.className = src.className
+      end
+      if (type(slot.subClass) ~= "string" or slot.subClass == "") and type(src.subClass) == "string" and src.subClass ~= "" then
+        slot.subClass = src.subClass
+      end
+      if slot.quality == nil and src.quality ~= nil then
+        slot.quality = src.quality
+      end
+      if (type(slot.name) ~= "string" or slot.name == "") and type(src.name) == "string" and src.name ~= "" then
+        slot.name = src.name
+      end
+    end
+  end
+end
+
+-- Selection from the back. Each destination takes the item that belongs
+-- furthest back among the slots in front of it, swapping when that slot
+-- is already occupied.
+local function sortSlots(slots, ops)
+  unifyItemKeys(slots)
+  local n = table.getn(slots)
+  for destIndex = n, 1, -1 do
+    local best = destIndex
+    local dest = slots[destIndex]
+    for srcIndex = 1, destIndex - 1 do
+      local src = slots[srcIndex]
+      if canPlace(src, dest) and ranksBehind(src, slots[best]) then
+        best = srcIndex
+      end
+    end
+    if best ~= destIndex then
+      local src = slots[best]
+      if dest.itemID then
+        table.insert(ops, {
+          kind = "swap",
+          srcBag = src.bag,
+          srcSlot = src.slot,
+          dstBag = dest.bag,
+          dstSlot = dest.slot,
+          itemID = src.itemID,
+          destItemID = dest.itemID,
+          name = src.name,
+          destName = dest.name,
+          family = src.family,
+          destFamily = dest.family,
+        })
+      else
         table.insert(ops, {
           kind = "move",
           srcBag = src.bag,
@@ -197,21 +353,15 @@ local function packSlots(slots, ops)
           name = src.name,
           family = src.family,
         })
-        dest.itemID = src.itemID
-        dest.count = src.count
-        dest.maxStack = src.maxStack
-        dest.name = src.name
-        dest.family = src.family
-        clearItem(src)
       end
-      writeIndex = writeIndex - 1
+      exchangeItems(src, dest)
     end
   end
   return nil
 end
 
 -- Returns the swaps to run, then an error string if a later swap is not legal.
--- Locked slots produce no swaps.
+-- The third return is true when a locked slot should wait for the next click.
 function BagSort:Plan(slots)
   local work = {}
   for i = 1, table.getn(slots) do
@@ -223,7 +373,7 @@ function BagSort:Plan(slots)
   end
   for i = 1, table.getn(work) do
     if work[i].locked then
-      return {}, "A bag slot is locked, so the sort stopped."
+      return {}, nil, true
     end
   end
   local ops = {}
@@ -231,8 +381,8 @@ function BagSort:Plan(slots)
   if stackErr then
     return ops, stackErr
   end
-  local packErr = packSlots(work, ops)
-  return ops, packErr
+  local sortErr = sortSlots(work, ops)
+  return ops, sortErr
 end
 
 function BagSort:Say(message)
@@ -296,14 +446,26 @@ function BagSort:ReadSlots()
       local name = nil
       local maxStack = nil
       local family = 0
+      local className = nil
+      local subClass = nil
+      local quality = nil
       if link then
         itemID = parseItemID(link)
         if itemCount < 1 then
           itemCount = 1
         end
         if itemID and type(GetItemInfo) == "function" then
-          local itemName, _, _, _, _, _, _, stack = GetItemInfo(itemID)
+          local itemName, _, rarity, _, _, itemType, itemSubType, stack = GetItemInfo(itemID)
           name = itemName
+          if type(itemType) == "string" and itemType ~= "" then
+            className = itemType
+          end
+          if type(itemSubType) == "string" and itemSubType ~= "" then
+            subClass = itemSubType
+          end
+          if rarity ~= nil then
+            quality = tonumber(rarity)
+          end
           maxStack = tonumber(stack)
           if maxStack and maxStack < 1 then
             maxStack = nil
@@ -329,6 +491,9 @@ function BagSort:ReadSlots()
         maxStack = maxStack,
         name = name,
         family = family,
+        className = className,
+        subClass = subClass,
+        quality = quality,
         bagFamily = bagFamily,
         bagName = bagName,
         locked = isLockedFlag(locked),
@@ -402,6 +567,41 @@ local function pickupFailedMessage(locked)
   return "Could not pick up that item, so the sort stopped."
 end
 
+-- A full pickup can be put back with ClearCursor. A split stack must not.
+local function releaseHeld(srcBag, srcSlot, dstBag, dstSlot, itemID, destLinkBefore, allowClear)
+  if not (CursorHasItem and CursorHasItem()) then
+    return true
+  end
+  restoreCursor(srcBag, srcSlot, dstBag, dstSlot, itemID, destLinkBefore)
+  if CursorHasItem and CursorHasItem() and allowClear and type(ClearCursor) == "function" then
+    ClearCursor()
+  end
+  return not (CursorHasItem and CursorHasItem())
+end
+
+local function cursorStuckMessage()
+  return "The swap was refused, and the item is still on the cursor. Click a bag slot to put it back."
+end
+
+-- True when this place call left the same item on the cursor.
+local function placeIgnored(heldBefore)
+  if not (CursorHasItem and CursorHasItem()) then
+    return false
+  end
+  local now = cursorItemID()
+  if heldBefore == nil or now == nil then
+    return true
+  end
+  return now == heldBefore
+end
+
+local function pickupIgnored(bag, slot)
+  if CursorHasItem and CursorHasItem() then
+    return false
+  end
+  return GetContainerItemLink(bag, slot) ~= nil
+end
+
 function BagSort:RunOp(op)
   if InCombatLockdown and InCombatLockdown() then
     return false, "Cannot sort bags in combat."
@@ -446,16 +646,97 @@ function BagSort:RunOp(op)
     end
     PickupContainerItem(op.srcBag, op.srcSlot)
     if not CursorHasItem() then
+      if pickupIgnored(op.srcBag, op.srcSlot) then
+        return false, nil, true
+      end
       return false, pickupFailedMessage(srcLocked)
     end
+    local held = cursorItemID()
     PickupContainerItem(op.dstBag, op.dstSlot)
     if CursorHasItem() then
-      if not restoreCursor(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore) then
-        return false, "The swap was refused, and the item is still on the cursor. Click a bag slot to put it back."
+      local ignored = placeIgnored(held)
+      if not releaseHeld(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore, true) then
+        return false, cursorStuckMessage()
+      end
+      if ignored then
+        return false, nil, true
       end
       return false, "That bag cannot hold this item, so the sort stopped."
     end
     if parseItemID(GetContainerItemLink(op.dstBag, op.dstSlot)) ~= op.itemID then
+      return false, "The swap was refused, so the sort stopped."
+    end
+    return true
+  end
+
+  if op.kind == "swap" then
+    local destID = parseItemID(destLinkBefore)
+    if not destLinkBefore or destID ~= op.destItemID then
+      return false, "The bag changed during the sort, so it stopped."
+    end
+    local probeSrc = {
+      family = liveItemFamily(srcLink, op.srcBag),
+      name = op.name,
+    }
+    local probeDst = {
+      family = liveItemFamily(destLinkBefore, op.dstBag),
+      name = op.destName,
+    }
+    local destBag = {
+      bagFamily = liveBagFamily(op.dstBag),
+      bagName = GetBagName and GetBagName(op.dstBag) or nil,
+    }
+    local srcBagInfo = {
+      bagFamily = liveBagFamily(op.srcBag),
+      bagName = GetBagName and GetBagName(op.srcBag) or nil,
+    }
+    if not itemFits(probeSrc, destBag) then
+      return false, cannotHoldMessage(probeSrc, destBag)
+    end
+    if not itemFits(probeDst, srcBagInfo) then
+      return false, cannotHoldMessage(probeDst, srcBagInfo)
+    end
+    PickupContainerItem(op.srcBag, op.srcSlot)
+    if not CursorHasItem() then
+      if pickupIgnored(op.srcBag, op.srcSlot) then
+        return false, nil, true
+      end
+      return false, pickupFailedMessage(srcLocked)
+    end
+    local held = cursorItemID()
+    PickupContainerItem(op.dstBag, op.dstSlot)
+    if not CursorHasItem() or placeIgnored(held) or (cursorItemID() and cursorItemID() ~= op.destItemID) then
+      local ignored = (not CursorHasItem()) or placeIgnored(held)
+      if not releaseHeld(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore, true) then
+        return false, cursorStuckMessage()
+      end
+      if parseItemID(GetContainerItemLink(op.dstBag, op.dstSlot)) == op.itemID
+        and parseItemID(GetContainerItemLink(op.srcBag, op.srcSlot)) == op.destItemID then
+        return true
+      end
+      if ignored then
+        return false, nil, true
+      end
+      return false, "The swap was refused, so the sort stopped."
+    end
+    held = cursorItemID()
+    PickupContainerItem(op.srcBag, op.srcSlot)
+    if CursorHasItem() then
+      local ignored = placeIgnored(held)
+      if not releaseHeld(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore, true) then
+        return false, cursorStuckMessage()
+      end
+      if parseItemID(GetContainerItemLink(op.dstBag, op.dstSlot)) == op.itemID
+        and parseItemID(GetContainerItemLink(op.srcBag, op.srcSlot)) == op.destItemID then
+        return true
+      end
+      if ignored then
+        return false, nil, true
+      end
+      return false, "The swap was refused, so the sort stopped."
+    end
+    if parseItemID(GetContainerItemLink(op.dstBag, op.dstSlot)) ~= op.itemID
+      or parseItemID(GetContainerItemLink(op.srcBag, op.srcSlot)) ~= op.destItemID then
       return false, "The swap was refused, so the sort stopped."
     end
     return true
@@ -469,6 +750,7 @@ function BagSort:RunOp(op)
   if amount < 1 then
     return false, "Could not pick up that stack, so the sort stopped."
   end
+  local split = amount < srcCount
   if amount >= srcCount then
     PickupContainerItem(op.srcBag, op.srcSlot)
   else
@@ -478,12 +760,20 @@ function BagSort:RunOp(op)
     SplitContainerItem(op.srcBag, op.srcSlot, amount)
   end
   if not CursorHasItem() then
+    if pickupIgnored(op.srcBag, op.srcSlot) then
+      return false, nil, true
+    end
     return false, pickupFailedMessage(srcLocked)
   end
+  local held = cursorItemID()
   PickupContainerItem(op.dstBag, op.dstSlot)
   if CursorHasItem() then
-    if not restoreCursor(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore) then
-      return false, "The swap was refused, and the item is still on the cursor. Click a bag slot to put it back."
+    local ignored = placeIgnored(held)
+    if not releaseHeld(op.srcBag, op.srcSlot, op.dstBag, op.dstSlot, op.itemID, destLinkBefore, not split) then
+      return false, cursorStuckMessage()
+    end
+    if ignored then
+      return false, nil, true
     end
     return false, "Those items did not stack, so the sort stopped."
   end
@@ -505,9 +795,19 @@ function BagSort:Sort()
     return
   end
   local slots = self:ReadSlots()
-  local ops, err = self:Plan(slots)
+  local ops, err, paused = self:Plan(slots)
+  if paused then
+    self:Say(LOCKED_MESSAGE)
+    refreshBagQuality()
+    return
+  end
   for i = 1, table.getn(ops) do
-    local ok, message = self:RunOp(ops[i])
+    local ok, message, again = self:RunOp(ops[i])
+    if again then
+      self:Say(CONTINUE_MESSAGE)
+      refreshBagQuality()
+      return
+    end
     if not ok then
       self:Say(message)
       refreshBagQuality()
@@ -580,7 +880,8 @@ local function styleSortButton(btn)
       return
     end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText(TOOLTIP, 1, 1, 1)
+    GameTooltip:SetText(TOOLTIP_TITLE, 1, 0.82, 0)
+    GameTooltip:AddLine(TOOLTIP_BODY, 1, 1, 1, 1)
     GameTooltip:Show()
   end)
   btn:SetScript("OnLeave", function()

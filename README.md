@@ -6,7 +6,7 @@ This is not a generic Auctioneer clone. The long-term goal is to treat the Aucti
 
 **What is the best thing I can actually do right now with this character, with the professions, recipes, inventory, and liquid capital I currently have?**
 
-Version **0.1.16** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
+Version **0.1.17** ranks one 20-hour transmute above repeatable crafts when that craft is profitable. The 450 profession target is the destination. The plan uses the live skill. A recipe above that skill is not the next row.
 
 The addon stays inside the normal 3.3.5a Lua environment. It does not click for you, does not send automated buys/posts, does not loot mail, and does not use anything outside the WoW client.
 
@@ -28,7 +28,7 @@ Jewelcrafting remains in the generic capability model for GLOBAL market analysis
 3. Compact buyout **order book** per item (aggregated by unit price)
 4. **Depth-aware acquisition cost** (walks cheapest levels until the requested quantity is filled)
 5. Quantity-weighted P10 / P25 / median / P75 / mean
-6. Essence and shard conversion arbitrage (both directions; item-use, no profession)
+6. Essence and shard conversion arbitrage (both directions; item-use, no profession), including Magic, Astral, Mystic, and Nether
 7. Saronite → Titanium transmute EV, gated on Alchemy 395 + known recipe 60350
 8. Realm/faction market keys (`Onyxia|Horde`, `Onyxia|Alliance`)
 9. Character snapshots keyed by `Realm|Faction|Name`

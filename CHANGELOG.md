@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.17 — Skill 1 actions
+
+- Magic, Astral, Mystic, and Nether essence pairs are item-use conversions. They need no profession and no skill, so they can be the next row at Alchemy 1 and Enchanting 1.
+- A recipe above the live skill stays locked. Skill 1 still does not plan Titanium, an epic gem, or a high-level disenchant.
+
 ## 0.1.16 — One 20-hour transmute
 
 - One cooldown row. It ranks the epic gems, the eternal cycle, and the old 20-hour metals this character can perform. It names the winner and the gold given up by skipping the runner-up. If none beat selling the materials, the row says skip. Still one cast.

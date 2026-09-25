@@ -16,9 +16,31 @@ OnyxiaGold.Data = OnyxiaGold.Data or {}
 
 local I = OnyxiaGold.Data.Items
 
--- Essence pairs are reversible item-use conversions.
--- Dream Shard combines one way. Prismatic shards stay a priced pair, not an action.
+-- Essence pairs are reversible item-use conversions. No profession and no skill,
+-- so they are legal at Alchemy 1 and Enchanting 1. Dream Shard combines one way.
+-- Prismatic shards stay a priced pair, not an action.
+local function essencePair(id, lesser, greater, shortName)
+  return {
+    id = id,
+    kind = "essence",
+    typeLabel = "Essence",
+    sourceItemID = greater.id,
+    sourceCount = 1,
+    targetItemID = lesser.id,
+    targetCount = 3,
+    reversible = true,
+    nameForward = "Greater " .. shortName .. " → Lesser " .. shortName,
+    nameReverse = "Lesser " .. shortName .. " → Greater " .. shortName,
+    notesForward = "1 Greater converts into 3 Lesser. Item-use conversion; no profession required.",
+    notesReverse = "3 Lesser convert into 1 Greater. Item-use conversion; no profession required.",
+  }
+end
+
 OnyxiaGold.Data.Conversions = {
+  essencePair("greater_magic_to_lesser", I.LESSER_MAGIC_ESSENCE, I.GREATER_MAGIC_ESSENCE, "Magic"),
+  essencePair("greater_astral_to_lesser", I.LESSER_ASTRAL_ESSENCE, I.GREATER_ASTRAL_ESSENCE, "Astral"),
+  essencePair("greater_mystic_to_lesser", I.LESSER_MYSTIC_ESSENCE, I.GREATER_MYSTIC_ESSENCE, "Mystic"),
+  essencePair("greater_nether_to_lesser", I.LESSER_NETHER_ESSENCE, I.GREATER_NETHER_ESSENCE, "Nether"),
   {
     id = "greater_eternal_to_lesser",
     kind = "essence",

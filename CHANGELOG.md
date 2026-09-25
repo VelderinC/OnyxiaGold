@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.22 — Factory mail
+
+- Mail is classified from the invoice, and from the client's own auction subject formats when those globals exist.
+- Collect Gold and Factory Sweep are clicks. Each click takes one safe auction-house mail. COD, personal, and unknown mail stay put. Mail is never deleted.
+- A full bag pauses an item take. If the take needs a hardware event or the client rejects it, the row says what to click. It does not pretend the mail was collected.
+
 ## 0.1.21 — Stack size and deposit
 
 - A new scan keeps stack size beside price. Two stack sizes at the same unit price stay two rows.

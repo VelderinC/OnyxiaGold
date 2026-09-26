@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.38 — Realised sales
+
+- A completed sale records the item, the quantity, the proceeds, and the time it sold. The auction-house cut and the deposit returned are recorded when the mail states them. The time listed and whether it was relisted are recorded when those are known. A missing cut stays blank. It is not guessed at 5%.
+- When that sale is the item a plan bought or crafted, the copy log names the plan. What to do now still uses the conservative sale price.
+
 ## 0.1.37 — Two-step craft path
 
 - When one known recipe makes the reagent for another, and keeping that item beats selling it and buying the reagent again, the session buys the lots the first craft still needs, crafts the first, crafts the second, and posts the final output. The intermediate stays in the plan. It is not sold and bought again, and that sale is not gold you can spend.

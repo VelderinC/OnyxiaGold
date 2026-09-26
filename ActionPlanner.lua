@@ -1726,6 +1726,18 @@ local function actionFromStep(step, parent, first)
     row.cashRequiredNow = 0
   end
   row.windowHint = step.windowHint
+  local planName
+  local opp = parent and parent.sourceOpp
+  if type(opp) == "table" and type(opp.name) == "string" and opp.name ~= "" then
+    planName = opp.name
+  elseif parent and parent.path and type(parent.detail) == "string" and parent.detail ~= "" then
+    planName = parent.detail
+  elseif step.flip and type(step.name) == "string" and step.name ~= "" then
+    planName = "Flip " .. step.name
+  end
+  if planName then
+    row.planName = planName
+  end
   return row
 end
 

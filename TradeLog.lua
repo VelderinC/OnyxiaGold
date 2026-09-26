@@ -6,6 +6,12 @@
   Auction House success mail are trades. Scans, snapshots, and expected
   profit are not. Mail is only read. Nothing here takes mail, deletes mail,
   posts an auction, or buys one.
+
+  A sale keeps the item, the quantity, the proceeds, and the time it sold.
+  The auction-house cut and the deposit returned are stored only when the
+  mail states them. The time listed, a relist, and the plan that bought or
+  crafted the item are stored only when that link is already known. A missing
+  cut is left unset. It is not guessed.
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
@@ -84,6 +90,30 @@ function TradeLog:Seen()
   return rec.tradeMailSeen
 end
 
+function TradeLog:Open()
+  if not OnyxiaGold.Database or not OnyxiaGold.Database.GetCharacter then
+    return nil
+  end
+  local rec = OnyxiaGold.Database:GetCharacter()
+  if not rec then
+    return nil
+  end
+  if type(rec.tradeOpen) ~= "table" then
+    rec.tradeOpen = {}
+  end
+  return rec.tradeOpen
+end
+
+local function trimOpen(open)
+  if type(open) ~= "table" then
+    return
+  end
+  local cap = (OnyxiaGold.Config and OnyxiaGold.Config.MaxTradeLines) or 400
+  while table.getn(open) > cap do
+    table.remove(open, 1)
+  end
+end
+
 function TradeLog.FormatLine(entry)
   entry = entry or {}
   local side = "BUY"
@@ -97,14 +127,54 @@ function TradeLog.FormatLine(entry)
     body = string.format("%dx %s", count, name)
   end
   local money = ""
-  if entry.copper ~= nil then
-    money = "  " .. plainMoney(entry.copper)
+  local proceeds = tonumber(entry.copper)
+  if entry.side == "sale" then
+    proceeds = TradeLog.RealisedProceeds(entry)
+  end
+  if proceeds ~= nil then
+    money = "  " .. plainMoney(proceeds)
   end
   local line = string.format("%s  %s  %s%s", entry.when or "", side, body, money)
+  if entry.side == "sale" then
+    local parts = {}
+    if type(entry.plan) == "string" and entry.plan ~= "" then
+      table.insert(parts, "Plan: " .. entry.plan)
+    end
+    if entry.cut ~= nil then
+      table.insert(parts, "Auction-house cut " .. plainMoney(entry.cut))
+    end
+    if entry.deposit ~= nil then
+      table.insert(parts, "Deposit returned " .. plainMoney(entry.deposit))
+    end
+    if type(entry.listedWhen) == "string" and entry.listedWhen ~= "" then
+      table.insert(parts, "Listed " .. entry.listedWhen)
+    end
+    if type(entry.when) == "string" and entry.when ~= "" then
+      table.insert(parts, "Sold " .. entry.when)
+    end
+    if entry.relisted == true then
+      table.insert(parts, "Relisted")
+    end
+    if table.getn(parts) > 0 then
+      line = line .. "  | " .. table.concat(parts, " | ")
+    end
+  end
   if type(entry.note) == "string" and entry.note ~= "" then
     line = line .. "  | " .. entry.note
   end
   return line
+end
+
+-- Proceeds the client reported. A missing cut is not filled in at 5%.
+function TradeLog.RealisedProceeds(entry)
+  if type(entry) ~= "table" or entry.side ~= "sale" then
+    return nil
+  end
+  local copper = tonumber(entry.copper)
+  if not copper or copper < 0 then
+    return nil
+  end
+  return copper
 end
 
 function TradeLog:Totals()
@@ -190,6 +260,37 @@ function TradeLog:Append(fields, quiet)
   end
   if type(fields.mailKey) == "string" and fields.mailKey ~= "" then
     entry.mailKey = fields.mailKey
+  end
+  if fields.side == "sale" then
+    if fields.cut ~= nil then
+      local cut = tonumber(fields.cut)
+      if cut and cut >= 0 then
+        entry.cut = cut
+      end
+    end
+    if fields.deposit ~= nil then
+      local returned = tonumber(fields.deposit)
+      if returned and returned >= 0 then
+        entry.deposit = returned
+      end
+    end
+    local listed = tonumber(fields.listed)
+    if listed and listed > 0 then
+      entry.listed = listed
+    end
+    if type(fields.listedWhen) == "string" and fields.listedWhen ~= "" then
+      entry.listedWhen = fields.listedWhen
+    end
+    if type(fields.plan) == "string" and fields.plan ~= "" then
+      entry.plan = fields.plan
+    end
+    if fields.relisted == true then
+      entry.relisted = true
+    end
+    local open = self:Open()
+    if open then
+      TradeLog.AttachKnown(entry, open)
+    end
   end
   table.insert(entries, entry)
   local cap = (OnyxiaGold.Config and OnyxiaGold.Config.MaxTradeLines) or 400
@@ -411,7 +512,51 @@ function TradeLog:ConsumeButtonBuy(itemID, name)
   return false
 end
 
+function TradeLog.IsExpiry(msg)
+  if type(msg) ~= "string" or msg == "" then
+    return false
+  end
+  local fmt = "Your auction of %s has expired."
+  if type(ERR_AUCTION_EXPIRED_S) == "string" and ERR_AUCTION_EXPIRED_S ~= "" then
+    fmt = ERR_AUCTION_EXPIRED_S
+  end
+  local pre = prefixOf(fmt, "Your auction of ")
+  if string.sub(msg, 1, string.len(pre)) ~= pre then
+    return false
+  end
+  local suffix = string.match(fmt, "%%s(.*)$") or ""
+  if suffix == "" then
+    return false
+  end
+  local rest = string.sub(msg, string.len(pre) + 1)
+  return string.sub(rest, -string.len(suffix)) == suffix
+end
+
+function TradeLog.ExpiryItem(msg)
+  if not TradeLog.IsExpiry(msg) then
+    return nil, nil
+  end
+  local fmt = "Your auction of %s has expired."
+  if type(ERR_AUCTION_EXPIRED_S) == "string" and ERR_AUCTION_EXPIRED_S ~= "" then
+    fmt = ERR_AUCTION_EXPIRED_S
+  end
+  local pre = prefixOf(fmt, "Your auction of ")
+  local suffix = string.match(fmt, "%%s(.*)$") or ""
+  local rest = string.sub(msg, string.len(pre) + 1)
+  if suffix ~= "" and string.sub(rest, -string.len(suffix)) == suffix then
+    rest = string.sub(rest, 1, -string.len(suffix) - 1)
+  end
+  return TradeLog.ItemFromMessage(msg, rest)
+end
+
 function TradeLog:OnSystemMessage(msg)
+  if self.IsExpiry(msg) then
+    local name, itemID = self.ExpiryItem(msg)
+    if name and name ~= "" then
+      self:NoteExpired(itemID, name)
+    end
+    return
+  end
   local parsed = self.ClassifySystemMessage(msg)
   if not parsed then
     return
@@ -488,6 +633,219 @@ function TradeLog.MailProceeds(money, bid, deposit, consignment)
   return nil
 end
 
+-- Cut and deposit are copied only when the invoice actually returned them.
+-- Proceeds stay the amount the client reported. They are not reduced by a
+-- house cut that the mail did not state.
+function TradeLog.SaleFieldsFromInvoice(money, bid, deposit, consignment)
+  local fields = {}
+  local proceeds = TradeLog.MailProceeds(money, bid, deposit, consignment)
+  if proceeds ~= nil then
+    fields.copper = proceeds
+  end
+  if consignment ~= nil then
+    local cut = tonumber(consignment)
+    if cut and cut >= 0 then
+      fields.cut = cut
+    end
+  end
+  if deposit ~= nil then
+    local returned = tonumber(deposit)
+    if returned and returned >= 0 then
+      fields.deposit = returned
+    end
+  end
+  return fields
+end
+
+function TradeLog.AttachKnown(entry, openRows)
+  if type(entry) ~= "table" or entry.side ~= "sale" or type(openRows) ~= "table" then
+    return entry
+  end
+  local found, index
+  for i = 1, table.getn(openRows) do
+    local row = openRows[i]
+    if type(row) == "table" and not row.expired and TradeLog.SameItem(row, entry.itemID, entry.name) then
+      found = row
+      index = i
+      break
+    end
+  end
+  if not found then
+    return entry
+  end
+  if (type(entry.plan) ~= "string" or entry.plan == "") and type(found.plan) == "string" and found.plan ~= "" then
+    entry.plan = found.plan
+  end
+  if entry.listed == nil and tonumber(found.listed) and tonumber(found.listed) > 0 then
+    entry.listed = tonumber(found.listed)
+  end
+  if (type(entry.listedWhen) ~= "string" or entry.listedWhen == "")
+    and type(found.listedWhen) == "string" and found.listedWhen ~= "" then
+    entry.listedWhen = found.listedWhen
+  end
+  if entry.relisted == nil and found.relisted == true then
+    entry.relisted = true
+  end
+  table.remove(openRows, index)
+  return entry
+end
+
+function TradeLog.MarkExpired(openRows, itemID, name)
+  if type(openRows) ~= "table" then
+    return false
+  end
+  for i = 1, table.getn(openRows) do
+    local row = openRows[i]
+    if type(row) == "table" and not row.expired and TradeLog.SameItem(row, itemID, name) then
+      row.expired = true
+      return true
+    end
+  end
+  return false
+end
+
+function TradeLog.PushBought(openRows, fields)
+  fields = fields or {}
+  if type(openRows) ~= "table" then
+    return nil
+  end
+  if type(fields.plan) ~= "string" or fields.plan == "" then
+    return nil
+  end
+  local itemID = tonumber(fields.itemID)
+  local name = fields.name
+  if (type(name) ~= "string" or name == "") and itemID and itemID > 0 then
+    name = "item:" .. tostring(itemID)
+  end
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  local row = {
+    kind = "buy",
+    name = name,
+    plan = fields.plan,
+  }
+  if itemID and itemID > 0 then
+    row.itemID = itemID
+  end
+  local count = tonumber(fields.count)
+  if count and count > 0 then
+    row.count = count
+  end
+  table.insert(openRows, row)
+  trimOpen(openRows)
+  return row
+end
+
+function TradeLog.PushListing(openRows, fields)
+  fields = fields or {}
+  if type(openRows) ~= "table" then
+    return nil
+  end
+  local itemID = tonumber(fields.itemID)
+  local name = fields.name
+  if (type(name) ~= "string" or name == "") and itemID and itemID > 0 then
+    name = "item:" .. tostring(itemID)
+  end
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  local relisted = nil
+  local boughtPlan
+  local i = 1
+  while i <= table.getn(openRows) do
+    local row = openRows[i]
+    if type(row) == "table" and TradeLog.SameItem(row, itemID, name) then
+      if row.expired then
+        relisted = true
+        if not boughtPlan and type(row.plan) == "string" and row.plan ~= "" then
+          boughtPlan = row.plan
+        end
+        table.remove(openRows, i)
+      elseif row.kind == "buy" then
+        if not boughtPlan and type(row.plan) == "string" and row.plan ~= "" then
+          boughtPlan = row.plan
+        end
+        table.remove(openRows, i)
+      else
+        i = i + 1
+      end
+    else
+      i = i + 1
+    end
+  end
+  local plan = fields.plan
+  if type(plan) ~= "string" or plan == "" then
+    plan = boughtPlan
+  end
+  local row = {
+    kind = "list",
+    name = name,
+  }
+  if itemID and itemID > 0 then
+    row.itemID = itemID
+  end
+  local count = tonumber(fields.count)
+  if count and count > 0 then
+    row.count = count
+  end
+  if type(plan) == "string" and plan ~= "" then
+    row.plan = plan
+  end
+  local listed = tonumber(fields.listed)
+  if listed and listed > 0 then
+    row.listed = listed
+  end
+  if type(fields.listedWhen) == "string" and fields.listedWhen ~= "" then
+    row.listedWhen = fields.listedWhen
+  end
+  if relisted == true then
+    row.relisted = true
+  end
+  table.insert(openRows, row)
+  trimOpen(openRows)
+  return row
+end
+
+function TradeLog:RememberBought(fields)
+  local open = self:Open()
+  if not open then
+    return nil
+  end
+  return TradeLog.PushBought(open, fields)
+end
+
+function TradeLog:RememberListed(fields)
+  fields = fields or {}
+  local open = self:Open()
+  if not open then
+    return nil
+  end
+  local listedWhen = fields.listedWhen
+  if type(listedWhen) ~= "string" or listedWhen == "" then
+    local stamp = self.ServerStamp()
+    if type(stamp) == "string" and stamp ~= "" then
+      listedWhen = stamp
+    end
+  end
+  return TradeLog.PushListing(open, {
+    itemID = fields.itemID,
+    name = fields.name,
+    count = fields.count,
+    plan = fields.plan,
+    listed = tonumber(fields.listed) or time(),
+    listedWhen = listedWhen,
+  })
+end
+
+function TradeLog:NoteExpired(itemID, name)
+  local open = self:Open()
+  if not open then
+    return false
+  end
+  return TradeLog.MarkExpired(open, itemID, name)
+end
+
 function TradeLog.MailFingerprint(auctionID, itemID, name, bid, buyout, deposit, consignment, money, playerName)
   auctionID = tonumber(auctionID)
   if auctionID and auctionID > 0 then
@@ -535,12 +893,15 @@ function TradeLog.ReadSuccessMail(index)
   if not name or name == "" then
     return nil
   end
+  local priced = TradeLog.SaleFieldsFromInvoice(money, bid, deposit, consignment)
   return {
     fingerprint = TradeLog.MailFingerprint(auctionID, itemID, name, bid, buyout, deposit, consignment, money, playerName),
     itemID = itemID,
     name = name,
     count = count,
-    copper = TradeLog.MailProceeds(money, bid, deposit, consignment),
+    copper = priced.copper,
+    cut = priced.cut,
+    deposit = priced.deposit,
   }
 end
 
@@ -573,7 +934,17 @@ function TradeLog:ApplyMail(info)
     if info.itemID and not entry.itemID then
       entry.itemID = info.itemID
     end
+    if info.cut ~= nil and entry.cut == nil then
+      entry.cut = info.cut
+    end
+    if info.deposit ~= nil and entry.deposit == nil then
+      entry.deposit = info.deposit
+    end
     entry.mailKey = info.fingerprint
+    local open = self:Open()
+    if open and (type(entry.plan) ~= "string" or entry.plan == "") then
+      TradeLog.AttachKnown(entry, open)
+    end
     return
   end
   self:Append({
@@ -582,6 +953,8 @@ function TradeLog:ApplyMail(info)
     itemID = info.itemID,
     count = info.count,
     copper = info.copper,
+    cut = info.cut,
+    deposit = info.deposit,
     source = "mail",
     mailKey = info.fingerprint,
   }, true)

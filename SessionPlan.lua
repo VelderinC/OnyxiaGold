@@ -40,6 +40,13 @@ local function nitems(t)
   return 0
 end
 
+local function sliceTick()
+  local schedule = OnyxiaGold.RefreshSchedule
+  if schedule and schedule.Tick then
+    schedule.Tick()
+  end
+end
+
 function Plan.Plain(copper)
   copper = tonumber(copper) or 0
   local negative = copper < 0
@@ -1571,6 +1578,7 @@ function Plan.BestPath(candidates, skip)
   local bestB = 0
   for a = 1, nitems(candidates) do
     for b = 1, nitems(candidates) do
+      sliceTick()
       if a ~= b and not (skip and skip(candidates[a], candidates[b])) then
         local priced = pricePath(candidates[a], candidates[b])
         if priced and (tonumber(priced.profit) or 0) > 0 then
@@ -1612,6 +1620,7 @@ function Plan.KnownCandidates()
   local prices = OnyxiaGold.Prices
   local out = {}
   Book.Walk(stored, function(recipe)
+    sliceTick()
     if not Book.CanPrice(recipe, now) then
       return
     end

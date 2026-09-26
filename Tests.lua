@@ -1433,6 +1433,52 @@ function Tests:Run()
     and string.find(resaleLine, "Plan: Saronite to Titanium", 1, true) ~= nil
     and string.find(resaleLine, "Relisted", 1, true) ~= nil)
 
+  local Schedule = OnyxiaGold.RefreshSchedule
+  if Schedule and Schedule.New then
+    local clock = Schedule.New(1)
+    local starts = 0
+    local burst = 25
+    for i = 1, burst do
+      clock:Push(i * 0.02, "planner")
+    end
+    local last = burst * 0.02
+    for i = 1, burst do
+      if clock:Poll(i * 0.02) == "start" then
+        starts = starts + 1
+      end
+    end
+    if clock:Poll(last + clock.quiet) == "start" then
+      starts = starts + 1
+    end
+    local during = clock:Poll(last + clock.quiet + 0.05)
+    clock:Finish(last + clock.quiet)
+    local after = clock:Poll(last + clock.quiet + 0.05)
+    check("a burst of list updates schedules one refresh",
+      starts == 1 and during == "running" and after ~= "start")
+
+    local follow = Schedule.New(1)
+    local first = false
+    follow:Push(0, "planner")
+    if follow:Poll(1) == "start" then
+      first = true
+    end
+    follow:Push(1.1, "planner")
+    follow:Push(1.2, "engine")
+    local second = follow:Poll(1.3)
+    follow:Finish(1.3)
+    local tooSoon = follow:Poll(1.3)
+    local nextPass = follow:Poll(1.2 + follow.quiet)
+    check("one interaction cannot queue a second full pass",
+      first
+      and second == "running"
+      and tooSoon ~= "start"
+      and nextPass == "start"
+      and follow.wantEngine == true)
+  else
+    check("a burst of list updates schedules one refresh", false)
+    check("one interaction cannot queue a second full pass", false)
+  end
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

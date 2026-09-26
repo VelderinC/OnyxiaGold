@@ -13,6 +13,13 @@ OnyxiaGold.Engines.Crafting = OnyxiaGold.Engines.Crafting or {}
 
 local Crafting = OnyxiaGold.Engines.Crafting
 
+local function sliceTick()
+  local schedule = OnyxiaGold.RefreshSchedule
+  if schedule and schedule.Tick then
+    schedule.Tick()
+  end
+end
+
 local function nitems(t)
   if type(t) ~= "table" then
     return 0
@@ -56,6 +63,7 @@ function Crafting:Collect()
     now = time()
   end
   Book.Walk(book, function(recipe)
+    sliceTick()
     if not Book.CanPrice(recipe, now) then
       return
     end

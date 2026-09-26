@@ -941,7 +941,16 @@ function Scanner:Complete()
   if OnyxiaGold.UI and OnyxiaGold.UI.RefreshMarketStatus then
     OnyxiaGold.UI:RefreshMarketStatus()
   end
-  OnyxiaGold.OpportunityEngine:Refresh()
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Push then
+    local now = 0
+    if type(GetTime) == "function" then
+      now = tonumber(GetTime()) or 0
+    end
+    clock:Push(now, "engine")
+  elseif OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+    OnyxiaGold.OpportunityEngine:Refresh()
+  end
 end
 
 function Scanner:OnUpdate(elapsed)

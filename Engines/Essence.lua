@@ -15,6 +15,9 @@ function Essence:Collect()
   for i = 1, table.getn(conversions) do
     local def = conversions[i]
     if def and def.kind == "essence" then
+      if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+        OnyxiaGold.RefreshSchedule.Tick()
+      end
       OnyxiaGold.OpportunityEngine:AppendConversionOpportunities(out, def)
     end
   end

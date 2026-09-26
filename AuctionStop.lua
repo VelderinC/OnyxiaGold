@@ -867,10 +867,22 @@ end
 
 function Stop:OnListUpdate()
   if self:BuyListening() then
+    -- One row for a Buy the player already clicked. Not a plan rebuild.
     self:OnBuyList()
     return
   end
   if not self.paging then
+    if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
+      return
+    end
+    local clock = OnyxiaGold.RefreshSchedule
+    if clock and clock.Push then
+      local now = 0
+      if type(GetTime) == "function" then
+        now = tonumber(GetTime()) or 0
+      end
+      clock:Push(now, "planner")
+    end
     return
   end
   if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
@@ -893,13 +905,18 @@ function Stop:OnListUpdate()
 end
 
 function Stop:OnHouseShown()
-  -- Refresh personal state only. Do not bind a row, query, page, or fill a post price.
+  -- Do not bind a row, query, page, or fill a post price.
   self.paging = false
   if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
     return
   end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-    OnyxiaGold.ActionPlanner:Refresh()
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Push then
+    local now = 0
+    if type(GetTime) == "function" then
+      now = tonumber(GetTime()) or 0
+    end
+    clock:Push(now, "planner")
   end
 end
 

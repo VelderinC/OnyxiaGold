@@ -17,6 +17,19 @@ local function skinCall(name)
   end
 end
 
+local function scheduleWork(kind)
+  local clock = OnyxiaGold.RefreshSchedule
+  local now = 0
+  if type(GetTime) == "function" then
+    now = tonumber(GetTime()) or 0
+  end
+  if clock and clock.Push then
+    clock:Push(now, kind or "planner")
+    return true
+  end
+  return false
+end
+
 local FRAME_WIDTH = 1080
 local FRAME_HEIGHT = 884
 local MIN_WIDTH = 1080
@@ -514,7 +527,9 @@ function UI:Create()
   refreshBtn:SetText("Refresh")
   refreshBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Refresh opportunities clicked")
-    OnyxiaGold.OpportunityEngine:Refresh()
+    if not scheduleWork("engine") and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+      OnyxiaGold.OpportunityEngine:Refresh()
+    end
   end)
 
   local scanBar = CreateFrame("StatusBar", "OnyxiaGoldScanBar", auction)
@@ -572,7 +587,9 @@ function UI:Create()
     OnyxiaGoldDB.settings.transmuteMasterOverride = on
     OnyxiaGoldDB.settings.transmuteMaster = on
     OnyxiaGold.Log:Info("UI", "Transmute Master override " .. tostring(on))
-    OnyxiaGold.OpportunityEngine:Refresh()
+    if not scheduleWork("engine") and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+      OnyxiaGold.OpportunityEngine:Refresh()
+    end
   end)
 
   local skillPreview = CreateFrame("CheckButton", "OnyxiaGoldSkillPreviewCheck", options, "UICheckButtonTemplate")
@@ -589,7 +606,7 @@ function UI:Create()
     local on = self:GetChecked() and true or false
     OnyxiaGoldDB.settings.showAboveSkill = on
     OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     OnyxiaGold.UI:Refresh()
@@ -609,7 +626,7 @@ function UI:Create()
     local on = self:GetChecked() and true or false
     OnyxiaGoldDB.settings.showBeyondGold = on
     OnyxiaGold.Log:Info("UI", "Show beyond my gold " .. tostring(on))
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     OnyxiaGold.UI:Refresh()
@@ -1833,7 +1850,7 @@ function UI:OnPostClick(row)
       self:SetStatus("Need a fresh market check before posting. Run a scan of this item, then click Post again.")
     elseif policy and action.stackBuyout and policy.totalBuyout ~= action.stackBuyout then
       self:SetStatus("Price changed. The row will refresh. Click Post again to list at the checked price.")
-      if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
         OnyxiaGold.ActionPlanner:Refresh()
       end
       self:Refresh()
@@ -1853,7 +1870,7 @@ function UI:OnPostClick(row)
     if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
       OnyxiaGold.Inventory:ScanBags()
     end
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     self:Refresh()
@@ -1915,7 +1932,7 @@ function UI:OnPostClick(row)
   if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
     OnyxiaGold.Inventory:ScanBags()
   end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+  if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
     OnyxiaGold.ActionPlanner:Refresh()
   end
   self:Refresh()
@@ -2311,8 +2328,9 @@ function UI:Show()
   if not self.frame then
     self:Create()
   end
-  self:Refresh()
+  -- Paint the plan already in memory. Do not rebuild it on this click.
   self.frame:Show()
+  self:Refresh()
   OnyxiaGold.Log:Debug("UI", "Main window shown")
 end
 

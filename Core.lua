@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.38"
+OnyxiaGold.Version = "0.1.39"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -276,6 +276,19 @@ function OnyxiaGold:ToggleDebug()
   end
 end
 
+local function scheduleWork(kind)
+  local clock = OnyxiaGold.RefreshSchedule
+  local now = 0
+  if type(GetTime) == "function" then
+    now = tonumber(GetTime()) or 0
+  end
+  if clock and clock.Push then
+    clock:Push(now, kind or "planner")
+    return true
+  end
+  return false
+end
+
 function OnyxiaGold:HandleSlash(msg)
   msg = string.lower(strtrim(msg or ""))
   if OnyxiaGold.Log then
@@ -311,7 +324,9 @@ function OnyxiaGold:HandleSlash(msg)
       end
     end
   elseif msg == "opportunities" or msg == "opp" then
-    self.OpportunityEngine:Refresh()
+    if not scheduleWork("engine") and self.OpportunityEngine and self.OpportunityEngine.Refresh then
+      self.OpportunityEngine:Refresh()
+    end
     self.UI:Show()
   elseif msg == "debug" then
     self:ToggleDebug()
@@ -341,7 +356,9 @@ function OnyxiaGold:HandleSlash(msg)
     else
       self:Print("Transmute Master manual override OFF. Using spellbook detection.")
     end
-    self.OpportunityEngine:Refresh()
+    if not scheduleWork("engine") and self.OpportunityEngine and self.OpportunityEngine.Refresh then
+      self.OpportunityEngine:Refresh()
+    end
   else
     self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og debug, /og log, /og reset, /og master")
   end

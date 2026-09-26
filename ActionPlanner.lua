@@ -527,6 +527,9 @@ local function maxCraftsForCash(opp, owned, deployable, capMax)
 end
 
 function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, beyondGold)
+  if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+    OnyxiaGold.RefreshSchedule.Tick()
+  end
   deployable = tonumber(deployable) or 0
   -- 0 means the caller is ignoring mail (cash-allocation loop).
   -- Otherwise this is Capital:GetSpendableAfterMail(), already reserve-adjusted,
@@ -2103,6 +2106,11 @@ function Planner:OrderSession(deployable)
 end
 
 function Planner:Refresh()
+  self.painting = self.actions
+  if type(self.painting) ~= "table" then
+    self.painting = {}
+  end
+  self.building = true
   self.actions = {}
   self.locked = {}
   local opps = {}
@@ -2638,10 +2646,15 @@ function Planner:Refresh()
     "actions=%d locked=%d remaining=%d",
     table.getn(self.actions), table.getn(self.locked), remaining
   ))
+  self.building = false
+  self.painting = nil
   return self.actions
 end
 
 function Planner:GetActions()
+  if self.building and type(self.painting) == "table" then
+    return self.painting
+  end
   return self.actions or {}
 end
 

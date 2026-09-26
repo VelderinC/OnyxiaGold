@@ -12,6 +12,13 @@ OnyxiaGold.Engines.Transmute = OnyxiaGold.Engines.Transmute or {}
 
 local Transmute = OnyxiaGold.Engines.Transmute
 
+local function sliceTick()
+  local schedule = OnyxiaGold.RefreshSchedule
+  if schedule and schedule.Tick then
+    schedule.Tick()
+  end
+end
+
 local function copyInputs(raw)
   local inputs = {}
   local ids = {}
@@ -521,6 +528,7 @@ function Transmute:Collect()
   local bench = {}
   local recipes = OnyxiaGold.Data.Transmutes or {}
   for i = 1, table.getn(recipes) do
+    sliceTick()
     local def = recipes[i]
     if cooldownOf(def) == COOLDOWN_GROUP then
       table.insert(cooldown, def)

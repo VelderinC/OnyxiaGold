@@ -76,11 +76,17 @@ function Shards:Collect()
   for i = 1, table.getn(conversions) do
     local def = conversions[i]
     if def and def.kind == "shard" then
+      if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+        OnyxiaGold.RefreshSchedule.Tick()
+      end
       OnyxiaGold.OpportunityEngine:AppendConversionOpportunities(out, def)
     end
   end
   local extra = enchantRows()
   for i = 1, table.getn(extra) do
+    if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
+    end
     table.insert(out, extra[i])
   end
   return out

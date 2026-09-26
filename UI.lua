@@ -341,11 +341,11 @@ local function applyQuietPanel(panel, list)
     insets = { left = 2, right = 2, top = 2, bottom = 2 },
   })
   if list then
-    panel:SetBackdropColor(0.04, 0.035, 0.03, 0.94)
-    panel:SetBackdropBorderColor(0.78, 0.66, 0.32, 0.9)
+    panel:SetBackdropColor(0.04, 0.035, 0.03, 1)
+    panel:SetBackdropBorderColor(0.78, 0.66, 0.32, 1)
   else
-    panel:SetBackdropColor(0.06, 0.05, 0.04, 0.9)
-    panel:SetBackdropBorderColor(0.55, 0.46, 0.26, 0.75)
+    panel:SetBackdropColor(0.06, 0.05, 0.04, 1)
+    panel:SetBackdropBorderColor(0.55, 0.46, 0.26, 1)
   end
 end
 

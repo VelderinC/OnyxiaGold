@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.41 — Opaque window
+
+- Opening /og showed the game world through the window. The skin had removed the dialog backdrop and painted the atlas tile instead, and that texture does not draw on 3.3.5a. The frame and each panel use a solid backdrop again, and the interior is a dark fill the client actually draws. The gold border stays. Prices, ranking, buy, and post are unchanged.
+
 ## 0.1.40 — Buy row prices
 
 - Each buy in What to do now names the price that row will pay, the expected sale of the item that gets posted, and the profit the plan already computed for that craft or flip. A flip's buy and sale are the same item. When a craft needs more than one reagent, each row shows that purchase's cost and the finished product's sale, and both show the craft's profit. It is not split. A missing price stays blank.

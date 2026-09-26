@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.40 — Buy row prices
+
+- Each buy in What to do now names the price that row will pay, the expected sale of the item that gets posted, and the profit the plan already computed for that craft or flip. A flip's buy and sale are the same item. When a craft needs more than one reagent, each row shows that purchase's cost and the finished product's sale, and both show the craft's profit. It is not split. A missing price stays blank.
+- The line at the top still says the maximum spend and the session profit. Ranking, lots, the cut, and the deposit are unchanged.
+
 ## 0.1.39 — Window freezes
 
 - Opening the auction house, an Auctionator page or buy, the mailbox, a letter, an attachment, a profession window, or /og no longer rebuilds the plan on that event. The window paints the plan already in memory. One refresh runs after the burst goes quiet, in short slices, so the client is not locked.

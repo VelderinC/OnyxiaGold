@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.37 — Two-step craft path
+
+- When one known recipe makes the reagent for another, and keeping that item beats selling it and buying the reagent again, the session buys the lots the first craft still needs, crafts the first, crafts the second, and posts the final output. The intermediate stays in the plan. It is not sold and bought again, and that sale is not gold you can spend.
+- Both crafts stay only while each extra craft is still worth more than it consumes. A listing, a bag slot, or the 20-hour cooldown already used by another craft is not used again. The line at the top names the next step of that path, and the errand when that window is closed.
+
 ## 0.1.36 — Visual skin
 
 - The window, buttons, and scan bar use the OnyxiaGold atlas. This is a visual skin, not an economic change. The next errand stays on the line at the top, in the same words.

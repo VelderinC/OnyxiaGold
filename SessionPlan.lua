@@ -8,6 +8,15 @@
 
   Each craft stays in its own order: buy the whole lots, then craft, then
   post. A later sale is not added to the purse, so it cannot pay for a buy.
+  Two known recipes can form one path when the first output is a reagent
+  of the second and keeping that item beats selling it and buying it
+  again. The path buys the lots the first craft still needs, crafts the
+  first, crafts the second, and posts only the final output. The
+  intermediate stays in the virtual inventory. It is not sold and then
+  bought again, and that sale is not purse gold. Both crafts stay only
+  while their own marginal profit is positive. Lots, bag slots, and the
+  20-hour cooldown are still shared, so the path does not take a listing
+  another craft already reserved.
   When the next step cannot be done from here, the top line names that
   errand first: the Auction House, the mailbox, a bank withdraw, or the
   profession window. The buy, craft, or post stays underneath it. Bank
@@ -730,6 +739,419 @@ local function stepsForCraft(candidate, priced, craftId, stoneStep)
   return steps
 end
 
+-- The first recipe's output is one reagent of the second. Both have to be
+-- known deterministic crafts. A flip is not a craft, and a recipe is not
+-- paired with itself.
+local function linkReagent(first, second)
+  if type(first) ~= "table" or type(second) ~= "table" or first == second then
+    return nil
+  end
+  if not first.known or not second.known then
+    return nil
+  end
+  if first.kind == "flip" or second.kind == "flip" or first.kind == "path" or second.kind == "path" then
+    return nil
+  end
+  local outID = tonumber(first.outputItemID)
+  local per = tonumber(first.outputCount) or 1
+  if per < 1 then
+    per = 1
+  end
+  if not outID then
+    return nil
+  end
+  local reagents = second.reagents or {}
+  for i = 1, nitems(reagents) do
+    local row = reagents[i]
+    if tonumber(row and row.itemID) == outID then
+      local count = tonumber(row.count) or 1
+      if count < 1 then
+        count = 1
+      end
+      return { itemID = outID, count = count, per = per, name = row.name }
+    end
+  end
+  return nil
+end
+
+local function scaleReagents(reagents, crafts)
+  local out = {}
+  crafts = tonumber(crafts) or 1
+  if crafts < 1 then
+    crafts = 1
+  end
+  for i = 1, nitems(reagents) do
+    local row = reagents[i]
+    local count = tonumber(row and row.count) or 1
+    if count < 1 then
+      count = 1
+    end
+    local id = tonumber(row and row.itemID)
+    if id then
+      table.insert(out, { itemID = id, count = crafts * count, name = row.name })
+    end
+  end
+  return out
+end
+
+local function mergeReagents(into, reagents)
+  for i = 1, nitems(reagents) do
+    local row = reagents[i]
+    local id = tonumber(row and row.itemID)
+    local count = tonumber(row and row.count) or 0
+    if id and count > 0 then
+      local found
+      for j = 1, nitems(into) do
+        if tonumber(into[j].itemID) == id then
+          found = into[j]
+          break
+        end
+      end
+      if found then
+        found.count = (tonumber(found.count) or 0) + count
+      else
+        table.insert(into, { itemID = id, count = count, name = row.name })
+      end
+    end
+  end
+  return into
+end
+
+local function otherReagents(second, intermediateID, crafts)
+  local out = {}
+  local reagents = second.reagents or {}
+  for i = 1, nitems(reagents) do
+    local row = reagents[i]
+    if tonumber(row and row.itemID) ~= intermediateID then
+      local count = tonumber(row.count) or 1
+      if count < 1 then
+        count = 1
+      end
+      local id = tonumber(row.itemID)
+      if id then
+        table.insert(out, { itemID = id, count = crafts * count, name = row.name })
+      end
+    end
+  end
+  return out
+end
+
+local function capCrafts(candidate)
+  local maxN = tonumber(candidate and candidate.crafts) or 1
+  if maxN < 1 then
+    maxN = 1
+  end
+  if candidate and candidate.cooldown and maxN > 1 then
+    maxN = 1
+  end
+  return maxN
+end
+
+-- Economic cost of buying the intermediate from the book that is left.
+-- Capital is not the limit here: the question is the gold of selling and
+-- buying, not whether that buy fits in the purse. Bag slots still apply,
+-- because a buy that does not fit is not an available exit.
+local function rebuyEconomic(session, itemID, units)
+  if not session or not session.Quote then
+    return nil
+  end
+  units = tonumber(units) or 0
+  if units <= 0 then
+    return 0
+  end
+  local quote = session:Quote(itemID, units, 20000000000)
+  if not quote or not quote.complete then
+    return nil
+  end
+  return tonumber(quote.economicConsumedCost) or 0
+end
+
+-- Price one keep-path on the current session. Nil when the link is not
+-- there, a craft's own marginal profit is not positive, or selling the
+-- first output and buying that reagent is the better gold. Does not reserve.
+local function pricePath(first, second)
+  local session = OnyxiaGold.SessionState
+  if not session or not session.RemainingCash then
+    return nil
+  end
+  local link = linkReagent(first, second)
+  if not link then
+    return nil
+  end
+  if first.cooldown and second.cooldown and first.cooldown == second.cooldown then
+    return nil
+  end
+  if first.cooldown and session.CooldownUsed and session:CooldownUsed(first.cooldown) then
+    return nil
+  end
+  if second.cooldown and session.CooldownUsed and session:CooldownUsed(second.cooldown) then
+    return nil
+  end
+  local maxA = capCrafts(first)
+  local maxB = capCrafts(second)
+  local netA = tonumber(first.net) or 0
+  local netB = tonumber(second.net) or 0
+  if netB <= 0 then
+    return nil
+  end
+  local kept
+  local prevProfit = 0
+  local prevBuy = 0
+  local prevConsumedA = 0
+  local b = 1
+  while b <= maxB do
+    local need = b * link.count
+    local aCrafts = math.floor((need + link.per - 1) / link.per)
+    if aCrafts < 1 or aCrafts > maxA then
+      break
+    end
+    local produced = aCrafts * link.per
+    if produced < need then
+      break
+    end
+    local inputsA = scaleReagents(first.reagents, aCrafts)
+    local inputsB = otherReagents(second, link.itemID, b)
+    local combined = {}
+    mergeReagents(combined, inputsA)
+    mergeReagents(combined, inputsB)
+    local priced = priceCraft(session, { reagents = combined, net = 0 }, 1)
+    if not priced then
+      break
+    end
+    local econAll = tonumber(priced.economic) or 0
+    local econA = econAll
+    if nitems(inputsA) > 0 then
+      local onlyA = priceCraft(session, { reagents = inputsA, net = 0 }, 1)
+      if onlyA then
+        econA = tonumber(onlyA.economic) or 0
+      end
+    else
+      econA = 0
+    end
+    if econA > econAll then
+      econA = econAll
+    end
+    local econOther = econAll - econA
+    if econOther < 0 then
+      econOther = 0
+    end
+    local consumedA = econA
+    if produced > need and produced > 0 then
+      consumedA = math.floor(econA * need / produced)
+    end
+    local consumed = consumedA + econOther
+    local profit = (b * netB) - consumed
+    local buyEconomic = rebuyEconomic(session, link.itemID, need)
+    local buyKnown = buyEconomic ~= nil
+    if not buyKnown then
+      buyEconomic = 0
+    end
+    local saleProceeds = aCrafts * netA
+    local saleProfit = saleProceeds - econA
+    if saleProfit < 0 then
+      saleProfit = 0
+    end
+    local buyProfit = 0
+    if buyKnown then
+      buyProfit = (b * netB) - buyEconomic - econOther
+      if buyProfit < 0 then
+        buyProfit = 0
+      end
+    end
+    local alternative = saleProfit + buyProfit
+    local extraProfit = profit - prevProfit
+    local extraMake = consumedA - prevConsumedA
+    local producer = (buyEconomic - prevBuy) - extraMake
+    if not buyKnown then
+      producer = extraProfit
+    end
+    if extraProfit <= 0 or producer <= 0 or profit <= alternative then
+      break
+    end
+    kept = {
+      profit = profit,
+      cash = priced.cash,
+      economic = consumed,
+      econA = econA,
+      consumedA = consumedA,
+      proceeds = b * netB,
+      lines = priced.lines,
+      firstCrafts = aCrafts,
+      secondCrafts = b,
+      first = first,
+      second = second,
+      intermediate = link.itemID,
+      produced = produced,
+      consumedUnits = need,
+      saleUnit = tonumber(second.saleUnit),
+    }
+    prevProfit = profit
+    prevBuy = buyEconomic
+    prevConsumedA = consumedA
+    b = b + 1
+  end
+  return kept
+end
+
+local function stepsForPath(priced, craftId)
+  local steps = {}
+  local lines = priced.lines or {}
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local purchased = tonumber(line.purchasedUnits) or 0
+    local buyUnits = tonumber(line.buyUnits) or 0
+    local cash = tonumber(line.buyCost) or 0
+    if purchased > 0 and (buyUnits > 0 or cash > 0) then
+      table.insert(steps, {
+        role = "buy",
+        craft = craftId,
+        itemID = line.itemID,
+        count = purchased,
+        cash = cash,
+        name = line.name or "item",
+        excessUnits = tonumber(line.excessUnits) or 0,
+      })
+    end
+  end
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local mailed = tonumber(line.mailUnits) or 0
+    if mailed > 0 then
+      table.insert(steps, {
+        role = "mail",
+        mail = "item",
+        craft = craftId,
+        itemID = line.itemID,
+        count = mailed,
+        name = line.name or "item",
+      })
+    end
+  end
+  for i = 1, nitems(lines) do
+    local line = lines[i]
+    local banked = tonumber(line.bankUnits) or 0
+    if banked > 0 then
+      table.insert(steps, {
+        role = "withdraw",
+        craft = craftId,
+        itemID = line.itemID,
+        count = banked,
+        name = line.name or "item",
+      })
+    end
+  end
+  local first = priced.first or {}
+  local second = priced.second or {}
+  local aCrafts = tonumber(priced.firstCrafts) or 0
+  local bCrafts = tonumber(priced.secondCrafts) or 0
+  if aCrafts > 0 then
+    table.insert(steps, {
+      role = "craft",
+      craft = craftId,
+      count = aCrafts,
+      name = first.output or first.name or "item",
+      profession = first.profession,
+    })
+  end
+  local proceeds = tonumber(priced.proceeds) or 0
+  if bCrafts > 0 then
+    table.insert(steps, {
+      role = "craft",
+      craft = craftId,
+      count = bCrafts,
+      name = second.output or second.name or "item",
+      profession = second.profession,
+      proceeds = proceeds,
+    })
+  end
+  local per = tonumber(second.outputCount) or 1
+  if per < 1 then
+    per = 1
+  end
+  local postUnits = bCrafts * per
+  if second.post == false then
+    postUnits = 0
+  end
+  if postUnits > 0 then
+    table.insert(steps, {
+      role = "post",
+      craft = craftId,
+      count = postUnits,
+      name = second.output or second.name or "item",
+      cash = 0,
+      itemID = tonumber(second.outputItemID),
+      proceeds = proceeds,
+    })
+  end
+  return steps
+end
+
+local function acceptPath(priced, craftId)
+  local session = OnyxiaGold.SessionState
+  if not session or not session.Reserve or type(priced) ~= "table" then
+    return nil
+  end
+  local first = priced.first or {}
+  local second = priced.second or {}
+  local lines = priced.lines or {}
+  local ownedCosts = {}
+  for lineIndex = 1, nitems(lines) do
+    local line = lines[lineIndex]
+    ownedCosts[lineIndex] = basisCost(session, line.itemID, line.ownedUnits)
+  end
+  local per = tonumber(second.outputCount) or 1
+  if per < 1 then
+    per = 1
+  end
+  local reserved = session:Reserve({
+    cash = priced.cash,
+    inputs = lines,
+    cooldown = first.cooldown or second.cooldown,
+    outputItemID = tonumber(second.outputItemID),
+    outputUnits = (tonumber(priced.secondCrafts) or 0) * per,
+  })
+  if not reserved then
+    return nil
+  end
+  if type(session.cooldowns) ~= "table" then
+    session.cooldowns = {}
+  end
+  if first.cooldown then
+    session.cooldowns[first.cooldown] = true
+  end
+  if second.cooldown then
+    session.cooldowns[second.cooldown] = true
+  end
+  for lineIndex = 1, nitems(lines) do
+    local line = lines[lineIndex]
+    local id = line.itemID
+    local left = (session.basis[id] or 0) - (ownedCosts[lineIndex] or 0)
+    left = left + (tonumber(line.leftoverAssetValue) or 0)
+    if left < 0 then
+      left = 0
+    end
+    if id then
+      session.basis[id] = left
+    end
+  end
+  local leftover = (tonumber(priced.produced) or 0) - (tonumber(priced.consumedUnits) or 0)
+  local mid = tonumber(priced.intermediate)
+  if leftover > 0 and mid then
+    session.bags[mid] = (session:GetBagCount(mid) or 0) + leftover
+    local add = (tonumber(priced.econA) or 0) - (tonumber(priced.consumedA) or 0)
+    if add > 0 then
+      session.basis[mid] = (session.basis[mid] or 0) + add
+    end
+    if session.freeSlots ~= nil then
+      local stack = session:StackSize(mid)
+      if stack and stack > 0 then
+        session.heldSlots = (session.heldSlots or 0) + math.floor((leftover + stack - 1) / stack)
+      end
+    end
+  end
+  return stepsForPath(priced, craftId)
+end
+
 local function flipQuote(row)
   local Lots = OnyxiaGold.Lots
   local Book = OnyxiaGold.SessionState
@@ -803,6 +1225,11 @@ end
 -- collide. A craft is kept only while its own marginal profit stays positive.
 -- A flip is buy, then post. It spends the deposit from current gold and
 -- does not take a lot a craft already reserved.
+-- A known pair whose output feeds the next recipe becomes one path when
+-- keeping that output beats selling it and buying the reagent. The path
+-- is sorted by that keep profit. A component whose own profit field is
+-- higher can still run first; once the path no longer prices, the two
+-- crafts are priced on their own.
 function Plan.Portfolio(candidates, resources)
   resources = resources or {}
   local Session = OnyxiaGold.SessionState
@@ -911,6 +1338,33 @@ function Plan.Portfolio(candidates, resources)
       end
     end
   end
+  local knownCrafts = {}
+  for i = 1, nitems(indexed) do
+    local row = indexed[i].row
+    if row.known and row.kind ~= "flip" and row.kind ~= "path" then
+      table.insert(knownCrafts, row)
+    end
+  end
+  local pathSerial = nitems(indexed)
+  for a = 1, nitems(knownCrafts) do
+    for b = 1, nitems(knownCrafts) do
+      if a ~= b then
+        local priced = pricePath(knownCrafts[a], knownCrafts[b])
+        if priced and (tonumber(priced.profit) or 0) > 0 then
+          pathSerial = pathSerial + 1
+          table.insert(indexed, {
+            row = {
+              kind = "path",
+              first = knownCrafts[a],
+              second = knownCrafts[b],
+              profit = priced.profit,
+            },
+            index = pathSerial + 1000,
+          })
+        end
+      end
+    end
+  end
   table.sort(indexed, function(a, b)
     local pa = tonumber(a.row.profit) or 0
     local pb = tonumber(b.row.profit) or 0
@@ -923,8 +1377,26 @@ function Plan.Portfolio(candidates, resources)
   local steps = {}
   local accepted = {}
   local flips = {}
+  local pathNotes = {}
+  local spentCraft = {}
   local profit = 0
   local proceeds = 0
+  local function waitingOnPath(candidate)
+    if not candidate or not candidate.known or candidate.kind == "path" then
+      return false
+    end
+    for i = 1, nitems(indexed) do
+      local row = indexed[i].row
+      if row.kind == "path" and (row.first == candidate or row.second == candidate) then
+        if not spentCraft[row.first] and not spentCraft[row.second] then
+          if pricePath(row.first, row.second) then
+            return true
+          end
+        end
+      end
+    end
+    return false
+  end
   for i = 1, nitems(indexed) do
     local candidate = indexed[i].row
     local cooldown = candidate.cooldown
@@ -934,7 +1406,7 @@ function Plan.Portfolio(candidates, resources)
       if sortProfit > 0 then
         local found = acceptFlip(candidate)
         if found then
-          local groupId = nitems(accepted) + nitems(flips) + 1
+          local groupId = nitems(accepted) + nitems(flips) + nitems(pathNotes) + 1
           local flipped = Plan.FlipSteps(found, groupId)
           if flipped then
             for stepIndex = 1, nitems(flipped) do
@@ -951,7 +1423,33 @@ function Plan.Portfolio(candidates, resources)
           end
         end
       end
-    elseif not blocked and sortProfit > 0 then
+    elseif candidate.kind == "path" then
+      local first = candidate.first
+      local second = candidate.second
+      if first and second and not spentCraft[first] and not spentCraft[second] then
+        local priced = pricePath(first, second)
+        if priced and (tonumber(priced.profit) or 0) > 0 then
+          local craftId = nitems(accepted) + nitems(flips) + nitems(pathNotes) + 1
+          local crafted = acceptPath(priced, craftId)
+          if crafted then
+            for stepIndex = 1, nitems(crafted) do
+              table.insert(steps, crafted[stepIndex])
+            end
+            spentCraft[first] = true
+            spentCraft[second] = true
+            table.insert(pathNotes, {
+              first = first.output or first.name,
+              second = second.output or second.name,
+              profit = priced.profit,
+              firstCrafts = priced.firstCrafts,
+              secondCrafts = priced.secondCrafts,
+            })
+            profit = profit + priced.profit
+            proceeds = proceeds + (tonumber(priced.proceeds) or 0)
+          end
+        end
+      end
+    elseif not blocked and sortProfit > 0 and not spentCraft[candidate] and not waitingOnPath(candidate) then
       local maxCrafts = tonumber(candidate.crafts) or 1
       if maxCrafts < 1 then
         maxCrafts = 1
@@ -1023,11 +1521,12 @@ function Plan.Portfolio(candidates, resources)
             end
             Session.equipped[stoneID] = true
           end
-          local craftId = nitems(accepted) + nitems(flips) + 1
+          local craftId = nitems(accepted) + nitems(flips) + nitems(pathNotes) + 1
           local crafted = stepsForCraft(candidate, kept, craftId, stoneStep)
           for stepIndex = 1, nitems(crafted) do
             table.insert(steps, crafted[stepIndex])
           end
+          spentCraft[candidate] = true
           table.insert(accepted, {
             name = candidate.output or candidate.name,
             profit = kept.profit,
@@ -1052,5 +1551,133 @@ function Plan.Portfolio(candidates, resources)
   })
   plan.crafts = accepted
   plan.flips = flips
+  plan.paths = pathNotes
   return plan
+end
+
+function Plan.PricePath(first, second)
+  return pricePath(first, second)
+end
+
+function Plan.AcceptPath(priced)
+  return acceptPath(priced, 0)
+end
+
+-- The best keep-path among these candidates on the current session.
+-- skip(first, second) drops a pair that already failed to reserve.
+function Plan.BestPath(candidates, skip)
+  local best
+  local bestA = 0
+  local bestB = 0
+  for a = 1, nitems(candidates) do
+    for b = 1, nitems(candidates) do
+      if a ~= b and not (skip and skip(candidates[a], candidates[b])) then
+        local priced = pricePath(candidates[a], candidates[b])
+        if priced and (tonumber(priced.profit) or 0) > 0 then
+          local better = not best or priced.profit > best.profit
+          if not better and best and priced.profit == best.profit then
+            better = a < bestA or (a == bestA and b < bestB)
+          end
+          if better then
+            best = priced
+            bestA = a
+            bestB = b
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- Known Alchemy and Enchanting recipes the character can perform.
+-- An external price is not a sale and is not a candidate, so it cannot
+-- authorise the buys on a path. A missing sale is a zero net: the final
+-- craft still has to clear its own marginal profit on a live price.
+function Plan.KnownCandidates()
+  local Book = OnyxiaGold.RecipeBook
+  local db = OnyxiaGold.Database
+  if not Book or not Book.Walk or not Book.CanPrice or not db or not db.GetCharacter then
+    return {}
+  end
+  local row = db:GetCharacter()
+  local stored = row and row.recipeBook
+  if type(stored) ~= "table" then
+    return {}
+  end
+  local now = 0
+  if time then
+    now = time()
+  end
+  local prices = OnyxiaGold.Prices
+  local out = {}
+  Book.Walk(stored, function(recipe)
+    if not Book.CanPrice(recipe, now) then
+      return
+    end
+    if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
+      local cap = OnyxiaGold.Capabilities:CanExecute({
+        profession = recipe.profession,
+        recipeSpellID = recipe.spellID,
+      })
+      if not cap or not cap.executable then
+        return
+      end
+    end
+    local outputID = tonumber(recipe.outputItemID)
+    local outputCount = tonumber(recipe.outputCount) or 1
+    if not outputID then
+      return
+    end
+    if outputCount < 1 then
+      outputCount = 1
+    end
+    local record = prices and prices.GetRecord and prices:GetRecord(outputID)
+    if record and record.source == "external" then
+      return
+    end
+    local saleUnit = nil
+    if prices and prices.GetOpportunitySaleUnit then
+      saleUnit = prices:GetOpportunitySaleUnit(outputID)
+    end
+    local net = 0
+    if saleUnit and saleUnit > 0 then
+      local gross = saleUnit * outputCount
+      if OnyxiaGold.ApplyAuctionHouseCut then
+        net = OnyxiaGold:ApplyAuctionHouseCut(gross) or 0
+      elseif Book.NetSale then
+        net = Book.NetSale(gross, 500)
+      end
+    end
+    local reagents = {}
+    local raw = recipe.reagents or {}
+    for i = 1, nitems(raw) do
+      local reagent = raw[i]
+      local id = tonumber(reagent and reagent.itemID)
+      local count = tonumber(reagent and reagent.count) or 1
+      if not id or count < 1 then
+        return
+      end
+      table.insert(reagents, { itemID = id, count = count, name = reagent.name })
+    end
+    local crafts = 200
+    if Book.CooldownOpen(recipe, now) == "ready" then
+      crafts = 1
+    end
+    table.insert(out, {
+      known = true,
+      name = recipe.name,
+      output = recipe.name,
+      outputItemID = outputID,
+      outputCount = outputCount,
+      net = net,
+      saleUnit = saleUnit,
+      profit = 0,
+      crafts = crafts,
+      profession = recipe.profession,
+      reagents = reagents,
+      spellID = recipe.spellID,
+    })
+  end)
+  return out
 end

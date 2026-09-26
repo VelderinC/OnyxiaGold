@@ -80,7 +80,68 @@ function Log:Count()
   if not db then
     return 0
   end
+  if db.head then
+    return tonumber(db.count) or 0
+  end
   return table.getn(db.lines)
+end
+
+function Log:AppendLine(line)
+  local db = self:EnsureDB()
+  if not db then
+    return
+  end
+  local cap = maxLines()
+  local lines = db.lines
+  if not db.head then
+    local n = table.getn(lines)
+    if n < cap then
+      lines[n + 1] = line
+      db.count = n + 1
+      return
+    end
+    db.head = 1
+    db.count = n
+  end
+  local count = tonumber(db.count) or 0
+  if count < cap then
+    lines[count + 1] = line
+    db.count = count + 1
+    return
+  end
+  local head = tonumber(db.head) or 1
+  if head < 1 or head > cap then
+    head = 1
+  end
+  lines[head] = line
+  head = head + 1
+  if head > cap then
+    head = 1
+  end
+  db.head = head
+  db.count = cap
+end
+
+function Log:OrderedLines()
+  local db = self:EnsureDB()
+  if not db then
+    return {}
+  end
+  if not db.head then
+    return db.lines
+  end
+  local cap = maxLines()
+  local count = tonumber(db.count) or 0
+  local head = tonumber(db.head) or 1
+  local out = {}
+  for i = 0, count - 1 do
+    local idx = head + i
+    while idx > cap do
+      idx = idx - cap
+    end
+    out[i + 1] = db.lines[idx]
+  end
+  return out
 end
 
 function Log:ShouldEcho(levelName)
@@ -121,11 +182,7 @@ function Log:Write(levelName, module, message)
   if self:ShouldStore(levelName) then
     local db = self:EnsureDB()
     if db then
-      table.insert(db.lines, line)
-      local cap = maxLines()
-      while table.getn(db.lines) > cap do
-        table.remove(db.lines, 1)
-      end
+      self:AppendLine(line)
     end
   end
 
@@ -162,17 +219,19 @@ function Log:Error(module, message)
 end
 
 function Log:Dump()
-  local db = self:EnsureDB()
-  if not db or table.getn(db.lines) == 0 then
+  local ordered = self:OrderedLines()
+  if table.getn(ordered) == 0 then
     return "(OnyxiaGold log is empty)"
   end
-  return table.concat(db.lines, "\n")
+  return table.concat(ordered, "\n")
 end
 
 function Log:Clear()
   local db = self:EnsureDB()
   if db then
     db.lines = {}
+    db.head = nil
+    db.count = 0
   end
   self:Write("INFO", "Log", "Log buffer cleared")
   self:RefreshWindow()

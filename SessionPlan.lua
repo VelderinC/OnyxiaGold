@@ -579,8 +579,14 @@ function Plan.ArrangeCrafts(groups)
     if pa ~= pb then
       return pa > pb
     end
-    local fa = tonumber(a.profit) or 0
-    local fb = tonumber(b.profit) or 0
+    local fa = tonumber(a.rank)
+    if fa == nil then
+      fa = tonumber(a.profit) or 0
+    end
+    local fb = tonumber(b.rank)
+    if fb == nil then
+      fb = tonumber(b.profit) or 0
+    end
     if fa ~= fb then
       return fa > fb
     end

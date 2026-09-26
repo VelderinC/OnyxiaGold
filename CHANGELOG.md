@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.42 — Performance rescue
+
+- Market and recipe changes build a candidate cache. Bag, gold, mail, and bank changes only reallocate that cache into a personal plan. Opening the auction house, the mailbox, a profession window, or /og does not rediscover the market.
+- Direct flips are priced with the market, then the planner only considers those candidates. A flip is not given confidence 1 from the spread alone.
+- The refresh runs in slices of about 2 ms. Lot selection, recipe margins, and the planner yield inside the work. Repeated quotes of the same lot are cached.
+- Database reads no longer repair the schema. A full scan commits in batches and then queues one candidate rebuild.
+- The trade log repaints only when a trade changes. A Buy click is an attempt until the client confirms the purchase. The next plan does not subtract that buy a second time.
+- A targeted buy collects the live pages it is allowed to see, then selects one whole-lot plan. A high-value post checks the live page before it lists.
+- /og perf prints the counters. /og perf reset clears them.
+
 ## 0.1.41 — Opaque window
 
 - Opening /og showed the game world through the window. The skin had removed the dialog backdrop and painted the atlas tile instead, and that texture does not draw on 3.3.5a. The frame and each panel use a solid backdrop again, and the interior is a dark fill the client actually draws. The gold border stays. Prices, ranking, buy, and post are unchanged.

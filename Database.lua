@@ -136,12 +136,11 @@ function DB:FormatMarketLabel(key)
 end
 
 function DB:GetMarket(key)
-  self:Ensure()
-  key = key or self:GetCurrentMarketKey() or "legacy"
-  if type(OnyxiaGoldDB.markets[key]) ~= "table" then
-    OnyxiaGoldDB.markets[key] = emptyMarket()
+  local resolved = self:ResolveMarketKey(key)
+  if self.currentMarket and resolved == self.currentMarketKey then
+    return self.currentMarket
   end
-  return self:EnsureMarketShape(OnyxiaGoldDB.markets[key])
+  return self:EnsureMarketForWrite(resolved)
 end
 
 function DB:EmptyCharacter()
@@ -264,15 +263,12 @@ function DB:GetCharacterKey()
 end
 
 function DB:GetCharacter(key)
-  self:Ensure()
-  key = key or self:GetCharacterKey()
-  if not key then
-    return nil
+  local current = self:GetCharacterKey()
+  local resolved = key or current
+  if self.currentCharacter and resolved and resolved == self.currentCharacterKey then
+    return self.currentCharacter
   end
-  if type(OnyxiaGoldDB.characters[key]) ~= "table" then
-    OnyxiaGoldDB.characters[key] = self:EmptyCharacter()
-  end
-  return self:EnsureCharacterShape(OnyxiaGoldDB.characters[key])
+  return self:EnsureCharacterForWrite(resolved)
 end
 
 local function snapshotLegacy(db)
@@ -485,15 +481,73 @@ function DB:Init()
 end
 
 function DB:Ensure()
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("dbEnsure", 1)
+  end
+  if perf and perf.Begin then
+    perf:Begin("database")
+  end
   if type(OnyxiaGoldDB) ~= "table" then
     OnyxiaGoldDB = self:EmptyRoot()
   else
     self:EnsureShape(OnyxiaGoldDB)
   end
+  if perf and perf.End then
+    perf:End("database")
+  end
+end
+
+function DB:ResolveMarketKey(key)
+  return key or self:GetCurrentMarketKey() or "legacy"
+end
+
+-- Shape work stays on the mutation boundary. Hot reads use the cache.
+function DB:EnsureMarketForWrite(key)
+  self:Ensure()
+  key = self:ResolveMarketKey(key)
+  if type(OnyxiaGoldDB.markets[key]) ~= "table" then
+    OnyxiaGoldDB.markets[key] = emptyMarket()
+  end
+  local market = self:EnsureMarketShape(OnyxiaGoldDB.markets[key])
+  OnyxiaGoldDB.markets[key] = market
+  if key == self:ResolveMarketKey(nil) then
+    self.currentMarketKey = key
+    self.currentMarket = market
+  end
+  return market
+end
+
+function DB:EnsureCharacterForWrite(key)
+  self:Ensure()
+  key = key or self:GetCharacterKey()
+  if not key then
+    return nil
+  end
+  if type(OnyxiaGoldDB.characters[key]) ~= "table" then
+    OnyxiaGoldDB.characters[key] = self:EmptyCharacter()
+  end
+  local rec = self:EnsureCharacterShape(OnyxiaGoldDB.characters[key])
+  OnyxiaGoldDB.characters[key] = rec
+  local current = self:GetCharacterKey()
+  if not current or key == current then
+    self.currentCharacterKey = key
+    self.currentCharacter = rec
+  end
+  return rec
+end
+
+function DB:InvalidateCaches()
+  self.currentMarket = nil
+  self.currentMarketKey = nil
+  self.currentCharacter = nil
+  self.currentCharacterKey = nil
+  self.batch = nil
 end
 
 -- Assign pending v1 data once realm/faction are known. Never destroy it.
 function DB:BindCurrentMarket()
+  self:InvalidateCaches()
   self:Ensure()
   local key = self:GetCurrentMarketKey()
   if not key then
@@ -519,6 +573,7 @@ function DB:BindCurrentMarket()
 end
 
 function DB:Reset()
+  self:InvalidateCaches()
   local preservedLog = OnyxiaGoldDB and OnyxiaGoldDB.log
   local preservedChars = OnyxiaGoldDB and OnyxiaGoldDB.characters
   local preservedSettings = OnyxiaGoldDB and OnyxiaGoldDB.settings
@@ -582,21 +637,114 @@ local function historyPoint(rec)
   }
 end
 
+local function appendPoint(history, itemID, rec)
+  if type(history) ~= "table" or not rec then
+    return
+  end
+  local list = history[itemID]
+  if type(list) ~= "table" then
+    list = {}
+    history[itemID] = list
+  end
+  list[table.getn(list) + 1] = historyPoint(rec)
+  local cap = OnyxiaGold.Config.MaxHistoryPoints or 30
+  local n = table.getn(list)
+  if n > cap then
+    local fresh = {}
+    local startAt = n - cap + 1
+    for i = startAt, n do
+      fresh[table.getn(fresh) + 1] = list[i]
+    end
+    history[itemID] = fresh
+  end
+end
+
 function DB:AppendHistory(itemID, rec)
   if not rec then
     return
   end
-  local market = self:GetMarket()
-  local history = market.history[itemID]
-  if type(history) ~= "table" then
-    history = {}
-    market.history[itemID] = history
+  local market = self.currentMarket or self:EnsureMarketForWrite()
+  if type(market.history) ~= "table" then
+    market.history = {}
   end
-  table.insert(history, historyPoint(rec))
-  local cap = OnyxiaGold.Config.MaxHistoryPoints or 30
-  while table.getn(history) > cap do
-    table.remove(history, 1)
+  appendPoint(market.history, itemID, rec)
+end
+
+local function snapshotNow()
+  if type(time) == "function" then
+    return time()
   end
+  if os and os.time then
+    return os.time()
+  end
+  return 0
+end
+
+function DB:BeginSnapshot(mode)
+  local market = self:EnsureMarketForWrite()
+  if type(market.history) ~= "table" then
+    market.history = {}
+  end
+  if type(market.latest) ~= "table" then
+    market.latest = {}
+  end
+  local full = mode ~= "quick"
+  self.batch = {
+    mode = full and "full" or "quick",
+    latest = full and {} or market.latest,
+    history = market.history,
+    count = 0,
+    timestamp = snapshotNow(),
+  }
+  return self.batch
+end
+
+function DB:WriteSnapshotItem(itemID, rec)
+  if not rec then
+    return
+  end
+  local batch = self.batch
+  if not batch then
+    self:BeginSnapshot("quick")
+    batch = self.batch
+  end
+  local row = compactRecord(itemID, rec, batch.timestamp)
+  batch.latest[itemID] = row
+  appendPoint(batch.history, itemID, row)
+  batch.count = (batch.count or 0) + 1
+end
+
+function DB:CommitSnapshot(scanMeta, scanType)
+  local batch = self.batch
+  local market = self.currentMarket or self:EnsureMarketForWrite()
+  if batch and batch.latest then
+    market.latest = batch.latest
+  end
+  self.currentMarket = market
+  local kind = scanType or (batch and batch.mode) or "full"
+  self:AppendScanSummary(market, {
+    timestamp = batch and batch.timestamp or snapshotNow(),
+    scanType = kind,
+    auctionCount = scanMeta and scanMeta.auctionCount or 0,
+    itemCount = batch and batch.count or 0,
+    queriedItems = batch and batch.count or 0,
+    pages = scanMeta and scanMeta.pages or 0,
+    duration = scanMeta and scanMeta.duration or 0,
+    cacheMisses = scanMeta and scanMeta.cacheMisses or 0,
+  })
+  self.batch = nil
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
+    OnyxiaGold.Lots.ClearQuoteCache()
+  end
+  if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+    OnyxiaGold.Revisions:Bump("market")
+  end
+  OnyxiaGold:Debug(string.format(
+    "%s snapshot items=%d auctions=%s",
+    kind,
+    batch and batch.count or 0,
+    tostring(scanMeta and scanMeta.auctionCount)
+  ), "Database")
 end
 
 function DB:AppendScanSummary(market, summary)
@@ -609,65 +757,20 @@ end
 
 -- Full Scan: replace this market's latest snapshot entirely.
 function DB:WriteFullSnapshot(aggregates, scanMeta)
-  self:Ensure()
-  local market = self:GetMarket()
-  local timestamp = time()
-  local latest = {}
-  local itemCount = 0
-  for itemID, rec in pairs(aggregates) do
-    itemCount = itemCount + 1
-    latest[itemID] = compactRecord(itemID, rec, timestamp)
-    self:AppendHistory(itemID, latest[itemID])
+  self:BeginSnapshot("full")
+  for itemID, rec in pairs(aggregates or {}) do
+    self:WriteSnapshotItem(itemID, rec)
   end
-  market.latest = latest
-  self:AppendScanSummary(market, {
-    timestamp = timestamp,
-    scanType = "full",
-    auctionCount = scanMeta and scanMeta.auctionCount or 0,
-    itemCount = itemCount,
-    queriedItems = itemCount,
-    pages = scanMeta and scanMeta.pages or 0,
-    duration = scanMeta and scanMeta.duration or 0,
-    cacheMisses = scanMeta and scanMeta.cacheMisses or 0,
-  })
-  OnyxiaGold:Debug(string.format(
-    "Full snapshot items=%d auctions=%s duration=%.1fs",
-    itemCount,
-    tostring(scanMeta and scanMeta.auctionCount),
-    tonumber(scanMeta and scanMeta.duration) or 0
-  ), "Database")
+  self:CommitSnapshot(scanMeta, "full")
 end
 
 -- Quick Scan: update only queried item IDs; leave the rest of latest intact.
 function DB:UpdateItems(aggregates, scanMeta)
-  self:Ensure()
-  local market = self:GetMarket()
-  if type(market.latest) ~= "table" then
-    market.latest = {}
+  self:BeginSnapshot("quick")
+  for itemID, rec in pairs(aggregates or {}) do
+    self:WriteSnapshotItem(itemID, rec)
   end
-  local timestamp = time()
-  local itemCount = 0
-  for itemID, rec in pairs(aggregates) do
-    itemCount = itemCount + 1
-    market.latest[itemID] = compactRecord(itemID, rec, timestamp)
-    self:AppendHistory(itemID, market.latest[itemID])
-  end
-  self:AppendScanSummary(market, {
-    timestamp = timestamp,
-    scanType = "quick",
-    auctionCount = scanMeta and scanMeta.auctionCount or 0,
-    itemCount = itemCount,
-    queriedItems = itemCount,
-    pages = scanMeta and scanMeta.pages or 0,
-    duration = scanMeta and scanMeta.duration or 0,
-    cacheMisses = scanMeta and scanMeta.cacheMisses or 0,
-  })
-  OnyxiaGold:Debug(string.format(
-    "Quick update items=%d auctions=%s duration=%.1fs",
-    itemCount,
-    tostring(scanMeta and scanMeta.auctionCount),
-    tonumber(scanMeta and scanMeta.duration) or 0
-  ), "Database")
+  self:CommitSnapshot(scanMeta, "quick")
 end
 
 -- Back-compat name used by older scanner complete path.
@@ -676,22 +779,26 @@ function DB:WriteLatest(aggregates, scanMeta)
 end
 
 function DB:GetLatest(itemID)
-  self:Ensure()
+  local market = self.currentMarket
+  if not market then
+    market = self:EnsureMarketForWrite()
+  end
   itemID = tonumber(itemID)
-  if not itemID then
+  if not itemID or not market or type(market.latest) ~= "table" then
     return nil
   end
-  local market = self:GetMarket()
   return market.latest[itemID]
 end
 
 function DB:GetHistory(itemID)
-  self:Ensure()
+  local market = self.currentMarket
+  if not market then
+    market = self:EnsureMarketForWrite()
+  end
   itemID = tonumber(itemID)
-  if not itemID then
+  if not itemID or not market or type(market.history) ~= "table" then
     return nil
   end
-  local market = self:GetMarket()
   return market.history[itemID]
 end
 

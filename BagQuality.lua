@@ -166,6 +166,18 @@ local events = CreateFrame("Frame", "OnyxiaGoldBagQualityEvents")
 events:RegisterEvent("BAG_UPDATE")
 events:SetScript("OnEvent", function()
   BagQuality:InstallHooks()
+  BagQuality.dirty = true
+end)
+events:SetScript("OnUpdate", function(_, elapsed)
+  if not BagQuality.dirty then
+    return
+  end
+  BagQuality.elapsed = (BagQuality.elapsed or 0) + (tonumber(elapsed) or 0)
+  if BagQuality.elapsed < 0.25 then
+    return
+  end
+  BagQuality.dirty = false
+  BagQuality.elapsed = 0
   BagQuality:Refresh()
 end)
 

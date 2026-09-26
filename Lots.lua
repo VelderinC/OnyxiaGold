@@ -56,6 +56,7 @@ local function copyLot(lot, level, seq)
     index = lot.index,
     itemID = lot.itemID,
     name = lot.name,
+    page = lot.page,
   }
 end
 
@@ -287,20 +288,43 @@ function Lots.Select(lots, requested, constraints)
   local bestCash = {}
   local from = {}
   bestCash[0] = 0
-  local maxU = 0
+  local reachable = { 0 }
   local best = nil
+  local scratchCash = Lots.scratchCash
+  if not scratchCash then
+    scratchCash = {}
+    Lots.scratchCash = scratchCash
+  end
+  local scratchFrom = Lots.scratchFrom
+  if not scratchFrom then
+    scratchFrom = {}
+    Lots.scratchFrom = scratchFrom
+  end
+  local scratchUsed = Lots.scratchUsed
+  if not scratchUsed then
+    scratchUsed = {}
+    Lots.scratchUsed = scratchUsed
+  end
+  local states = 0
+  local perf = OnyxiaGold.Performance
+  local queued = {}
 
   for lotIndex = 1, nitems(work) do
-    local lot = work[lotIndex]
-    local snapshotCash = {}
-    local snapshotFrom = {}
-    for u = 0, maxU do
-      snapshotCash[u] = bestCash[u]
-      snapshotFrom[u] = from[u]
+    if lotIndex % 4 == 0 and OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
     end
-    local limit = maxU
-    for u = 0, limit do
-      local cash = snapshotCash[u]
+    local lot = work[lotIndex]
+    local nReach = nitems(reachable)
+    for i = 1, nReach do
+      local u = reachable[i]
+      scratchCash[u] = bestCash[u]
+      scratchFrom[u] = from[u]
+      scratchUsed[i] = u
+    end
+    states = states + nReach
+    for i = 1, nReach do
+      local u = scratchUsed[i]
+      local cash = scratchCash[u]
       if cash ~= nil and u < requested then
         local newCash = cash + lot.cash
         local allowed = (capital == nil or newCash <= capital)
@@ -312,7 +336,7 @@ function Lots.Select(lots, requested, constraints)
             if take < lot.s and lot.s > 0 then
               part = math.floor(lot.cash * take / lot.s)
             end
-            local chain = collectLots(snapshotFrom, u)
+            local chain = collectLots(scratchFrom, u)
             table.insert(chain, lotIndex)
             local plan = {
               economic = cash + part,
@@ -324,18 +348,30 @@ function Lots.Select(lots, requested, constraints)
               best = plan
             end
           else
+            local existed = scratchCash[newUnits] ~= nil
             local previous = bestCash[newUnits]
             if previous == nil or newCash < previous then
               bestCash[newUnits] = newCash
               from[newUnits] = { prev = u, lot = lotIndex }
-              if newUnits > maxU then
-                maxU = newUnits
+              if not existed and not queued[newUnits] then
+                queued[newUnits] = true
+                reachable[nitems(reachable) + 1] = newUnits
               end
             end
           end
         end
       end
     end
+    for i = 1, nReach do
+      local u = scratchUsed[i]
+      scratchCash[u] = nil
+      scratchFrom[u] = nil
+    end
+  end
+  if perf and perf.Add then
+    perf:Add("lotSelects", 1)
+    perf:Add("lotStates", states)
+    perf:Add("lotsConsidered", nitems(work))
   end
 
   if not best then
@@ -354,6 +390,7 @@ function Lots.Select(lots, requested, constraints)
       index = lot.index,
       itemID = lot.itemID,
       name = lot.name,
+      page = lot.page,
     })
     purchased = purchased + lot.s
   end
@@ -375,7 +412,73 @@ function Lots.Select(lots, requested, constraints)
   return quote
 end
 
+local function quoteConstraintKey(constraints)
+  if type(constraints) ~= "table" then
+    return "-"
+  end
+  return tostring(constraints.capital) .. ":" .. tostring(constraints.freeSlots) .. ":"
+    .. tostring(constraints.stackSize) .. ":" .. tostring(constraints.partialRoom) .. ":"
+    .. tostring(constraints.bookGeneration)
+end
+
+local function quoteLevelsKey(levels)
+  local n = nitems(levels)
+  local parts = {}
+  for i = 1, n do
+    local row = levels[i]
+    parts[i] = tostring(row and row.p) .. "x" .. tostring(row and (row.q or row.quantity))
+      .. "x" .. tostring(row and (row.n or row.auctions)) .. "x" .. tostring(row and row.s)
+  end
+  return table.concat(parts, ";")
+end
+
+local function copyQuote(quote)
+  local copy = {}
+  for key, value in pairs(quote) do
+    if key ~= "selectedLots" then
+      copy[key] = value
+    end
+  end
+  local lots = {}
+  local selected = quote.selectedLots or {}
+  for i = 1, nitems(selected) do
+    local lot = selected[i]
+    lots[i] = {
+      p = lot.p,
+      s = lot.s,
+      cash = lot.cash,
+      level = lot.level,
+      seq = lot.seq,
+      index = lot.index,
+      itemID = lot.itemID,
+      name = lot.name,
+      page = lot.page,
+    }
+  end
+  copy.selectedLots = lots
+  return copy
+end
+
+function Lots.ClearQuoteCache()
+  Lots.quoteCache = {}
+end
+
+Lots.quoteCache = Lots.quoteCache or {}
+
 function Lots.Quote(levels, requested, constraints)
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("lotQuotes", 1)
+  end
+  local key = tostring(math.floor(tonumber(requested) or 0)) .. "#" .. quoteConstraintKey(constraints)
+    .. "#" .. quoteLevelsKey(levels)
+  local cached = Lots.quoteCache[key]
+  if cached then
+    if perf and perf.Add then
+      perf:Add("lotQuoteHits", 1)
+    end
+    return copyQuote(cached)
+  end
   local lots = Lots.Expand(levels, requested)
   local quote = Lots.Select(lots, requested, constraints)
   quote.requestedQuantity = quote.requestedUnits
@@ -389,7 +492,8 @@ function Lots.Quote(levels, requested, constraints)
   end
   local last = quote.selectedLots[nitems(quote.selectedLots)]
   quote.marginalUnitCost = last and last.p or nil
-  return quote
+  Lots.quoteCache[key] = quote
+  return copyQuote(quote)
 end
 
 function Lots.RequiredBid(minBid, bidAmount, minIncrement)
@@ -601,6 +705,9 @@ function Lots.FlipMargin(args)
   end
   local best
   for i = 1, nitems(levels) do
+    if i % 8 == 0 and OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
+    end
     local row = levels[i]
     local unit = math.floor(tonumber(row.p) or 0)
     local stack = math.floor(tonumber(row.s) or 0)
@@ -656,6 +763,40 @@ function Lots.FlipMargin(args)
     best.index = nil
   end
   return best
+end
+
+-- Spread alone is not liquidity. Confidence stays below 1 until sales exist.
+function Lots.FlipConfidence(args)
+  args = args or {}
+  local auctions = tonumber(args.auctions) or 0
+  local quantity = tonumber(args.quantity) or 0
+  local confidence = 0.35
+  if auctions >= 8 and quantity >= 40 then
+    confidence = 0.85
+  elseif auctions >= 4 and quantity >= 20 then
+    confidence = 0.7
+  elseif auctions >= 2 then
+    confidence = 0.55
+  end
+  local sale = tonumber(args.sale) or 0
+  local unit = tonumber(args.unit) or 0
+  if sale > 0 and unit > 0 and (sale - unit) / sale > 0.5 then
+    confidence = confidence - 0.1
+  end
+  local age = tonumber(args.age)
+  local quick = 600
+  if OnyxiaGold.Config and OnyxiaGold.Config.QuickScanStaleSeconds then
+    quick = tonumber(OnyxiaGold.Config.QuickScanStaleSeconds) or quick
+  end
+  if age and age > quick then
+    confidence = confidence - 0.15
+  end
+  if confidence < 0.15 then
+    confidence = 0.15
+  elseif confidence > 0.9 then
+    confidence = 0.9
+  end
+  return confidence
 end
 
 function Lots.PostEconomics(saleUnit, stack, inventoryUnit, cutBPS)

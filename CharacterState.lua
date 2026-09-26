@@ -88,9 +88,16 @@ local function nowSeconds()
   return 0
 end
 
--- Queue one rebuild. Event handlers must not run it on the UI thread.
-local function scheduleRefresh(kind)
-  if kind ~= "engine" then
+-- Queue one domain job. Event handlers must not run it on the UI thread.
+-- market rebuilds candidates. plan reallocates them. ui only paints.
+local function scheduleRefresh(kind, reason)
+  kind = kind or "plan"
+  if kind == "engine" then
+    kind = "market"
+  elseif kind == "planner" then
+    kind = "plan"
+  end
+  if kind ~= "market" then
     if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
       if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.RefreshHeader then
         OnyxiaGold.UI:RefreshHeader()
@@ -100,14 +107,15 @@ local function scheduleRefresh(kind)
   end
   local clock = OnyxiaGold.RefreshSchedule
   if clock and clock.Push then
-    clock:Push(nowSeconds(), kind or "planner")
+    clock:Push(nowSeconds(), kind, reason)
     return
   end
-  if kind == "engine" and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+  if kind == "market" and OnyxiaGold.CandidateCache and OnyxiaGold.CandidateCache.Build then
+    OnyxiaGold.CandidateCache:Build()
+  elseif kind == "market" and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
     OnyxiaGold.OpportunityEngine:Refresh()
-    return
   end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+  if kind ~= "ui" and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
     OnyxiaGold.ActionPlanner:Refresh()
   end
   if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
@@ -141,12 +149,32 @@ local function tryRebuildOpportunities()
     return false
   end
   opportunitiesRebuilt = true
-  scheduleRefresh("engine")
+  scheduleRefresh("market", "login")
   return true
 end
 
-local function refreshPlannerSoon()
-  scheduleRefresh("planner")
+local function refreshPlannerSoon(reason)
+  scheduleRefresh("plan", reason)
+end
+
+local function refreshWindow(reason)
+  scheduleRefresh("ui", reason)
+end
+
+local function noteOwnedChange(reason)
+  local owned = OnyxiaGold.OwnedAuctions
+  if not owned or not owned.Scan then
+    refreshWindow(reason)
+    return
+  end
+  local before = owned.Fingerprint and owned:Fingerprint() or ""
+  owned:Scan()
+  local after = owned.Fingerprint and owned:Fingerprint() or before
+  if before ~= after then
+    refreshPlannerSoon(reason)
+  else
+    refreshWindow(reason)
+  end
 end
 
 function State:OnLogin()
@@ -190,16 +218,16 @@ function State:OnEvent(event, arg1)
       OnyxiaGold.Capabilities:ScanSpecialisations()
     end
     if not tryRebuildOpportunities() then
-      refreshPlannerSoon()
+      refreshPlannerSoon("enter")
     end
   elseif event == "PLAYER_LEVEL_UP" then
     self:RefreshIdentity()
-    refreshPlannerSoon()
+    refreshPlannerSoon("level")
   elseif event == "PLAYER_MONEY" then
     if OnyxiaGold.Capital then
       OnyxiaGold.Capital:RefreshLiquid()
     end
-    refreshPlannerSoon()
+    refreshPlannerSoon("money")
   elseif event == "BAG_UPDATE" then
     bagDirty = true
     bagElapsed = 0
@@ -207,7 +235,7 @@ function State:OnEvent(event, arg1)
     if OnyxiaGold.Capabilities then
       OnyxiaGold.Capabilities:ScanProfessions()
     end
-    refreshPlannerSoon()
+    refreshPlannerSoon("skill")
   elseif event == "TRADE_SKILL_SHOW" then
     tradeDirty = true
     tradeElapsed = 0
@@ -231,32 +259,26 @@ function State:OnEvent(event, arg1)
     if OnyxiaGold.Mail then
       OnyxiaGold.Mail:ScanInbox()
     end
-    refreshPlannerSoon()
+    refreshPlannerSoon("mail")
   elseif event == "MAIL_CLOSED" then
     if OnyxiaGold.Mail then
       OnyxiaGold.Mail:OnMailboxClosed()
     end
-    refreshPlannerSoon()
+    refreshWindow("mail-closed")
   elseif event == "AUCTION_HOUSE_SHOW" then
-    if OnyxiaGold.OwnedAuctions then
-      OnyxiaGold.OwnedAuctions:Scan()
-    end
-    refreshPlannerSoon()
+    noteOwnedChange("ah-show")
   elseif event == "AUCTION_OWNED_LIST_UPDATE" then
-    if OnyxiaGold.OwnedAuctions then
-      OnyxiaGold.OwnedAuctions:Scan()
-    end
-    refreshPlannerSoon()
+    noteOwnedChange("owned")
   elseif event == "AUCTION_HOUSE_CLOSED" then
     if OnyxiaGold.OwnedAuctions then
       OnyxiaGold.OwnedAuctions:OnClosed()
     end
-    refreshPlannerSoon()
+    refreshWindow("ah-closed")
   elseif event == "BANKFRAME_OPENED" then
     if OnyxiaGold.Inventory then
       OnyxiaGold.Inventory:ScanBank()
     end
-    refreshPlannerSoon()
+    refreshPlannerSoon("bank")
   elseif event == "BANKFRAME_CLOSED" then
     -- last bank snapshot already persisted on open/scan
   end
@@ -303,7 +325,7 @@ eventFrame:SetScript("OnUpdate", function(self, elapsed)
           OnyxiaGold.Inventory:ScanBank()
         end
       end
-      refreshPlannerSoon()
+      refreshPlannerSoon("bags")
     end
   end
   if tradeDirty then
@@ -316,9 +338,12 @@ eventFrame:SetScript("OnUpdate", function(self, elapsed)
         replaced = OnyxiaGold.Capabilities:ScanOpenTradeSkill() and true or false
       end
       if replaced then
-        scheduleRefresh("engine")
+        if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+          OnyxiaGold.Revisions:Bump("recipe")
+        end
+        scheduleRefresh("market", "recipes")
       else
-        refreshPlannerSoon()
+        refreshWindow("profession")
       end
     end
   end

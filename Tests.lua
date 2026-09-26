@@ -1522,7 +1522,7 @@ function Tests:Run()
     local starts = 0
     local burst = 25
     for i = 1, burst do
-      clock:Push(i * 0.02, "planner")
+      clock:Push(i * 0.02, "plan")
     end
     local last = burst * 0.02
     for i = 1, burst do
@@ -1541,12 +1541,12 @@ function Tests:Run()
 
     local follow = Schedule.New(1)
     local first = false
-    follow:Push(0, "planner")
+    follow:Push(0, "plan")
     if follow:Poll(1) == "start" then
       first = true
     end
-    follow:Push(1.1, "planner")
-    follow:Push(1.2, "engine")
+    follow:Push(1.1, "plan")
+    follow:Push(1.2, "market")
     local second = follow:Poll(1.3)
     follow:Finish(1.3)
     local tooSoon = follow:Poll(1.3)
@@ -1556,11 +1556,13 @@ function Tests:Run()
       and second == "running"
       and tooSoon ~= "start"
       and nextPass == "start"
-      and follow.wantEngine == true)
+      and follow.job == "market")
   else
     check("a burst of list updates schedules one refresh", false)
     check("one interaction cannot queue a second full pass", false)
   end
+
+  self:RunRescue(check, Lots)
 
   local passed = nitems(lines) - failed
   local head
@@ -1572,4 +1574,334 @@ function Tests:Run()
   table.insert(lines, tostring(passed) .. " passed, " .. tostring(failed) .. " failed")
   table.insert(lines, 1, head)
   return table.concat(lines, "\n"), failed == 0
+end
+
+function Tests:RunRescue(check, Lots)
+  local Schedule = OnyxiaGold.RefreshSchedule
+  if Schedule and Schedule.New then
+    local held = Schedule.New(1)
+    held:Push(0, "market", "scan")
+    local heldDeadline = held.deadline
+    held:Push(0.2, "plan", "bags")
+    held:Push(0.3, "ui", "ah-show")
+    check("a window or bag event does not replace a pending market job",
+      held.job == "market" and held.deadline == heldDeadline and held.reason == "scan")
+
+    local browse = Schedule.New(1)
+    browse:Push(0, "ui", "ah-show")
+    check("opening the auction house is only a ui job", browse.job == "ui")
+  else
+    check("a window or bag event does not replace a pending market job", false)
+    check("opening the auction house is only a ui job", false)
+  end
+
+  local Perf = OnyxiaGold.Performance
+  local DB = OnyxiaGold.Database
+  if Perf and DB and DB.EnsureMarketForWrite and DB.GetLatest and DB.GetCharacter then
+    DB:EnsureMarketForWrite("Onyxia|Horde")
+    DB:EnsureCharacterForWrite("Onyxia|Horde|Tester")
+    local ensures = Perf:Count("dbEnsure")
+    for _ = 1, 10000 do
+      DB:GetLatest(1)
+      DB:GetCharacter()
+    end
+    check("hot market and character reads do not reshape the database",
+      Perf:Count("dbEnsure") == ensures)
+  else
+    check("hot market and character reads do not reshape the database", false)
+  end
+
+  local benchLevels = {}
+  for i = 1, 40 do
+    benchLevels[i] = { p = 1000 + i * 50, q = 20, n = 4, s = 5 }
+  end
+  local benchNeed = 30
+  local benchCaps = { capital = 5000000, freeSlots = 20, stackSize = 5, partialRoom = 0 }
+  Lots.ClearQuoteCache()
+  local freshQuote = Lots.Quote(benchLevels, benchNeed, benchCaps)
+  local freshRuns = 100
+  local freshStarted = os.clock()
+  for _ = 1, freshRuns do
+    Lots.ClearQuoteCache()
+    Lots.Quote(benchLevels, benchNeed, benchCaps)
+  end
+  local freshSeconds = os.clock() - freshStarted
+  Lots.ClearQuoteCache()
+  Lots.Quote(benchLevels, benchNeed, benchCaps)
+  local cachedRuns = 100
+  local cachedStarted = os.clock()
+  for _ = 1, cachedRuns do
+    Lots.Quote(benchLevels, benchNeed, benchCaps)
+  end
+  local cachedSeconds = os.clock() - cachedStarted
+  local cachedQuote = Lots.Quote(benchLevels, benchNeed, benchCaps)
+  check(string.format(
+    "cached quotes stay cheaper than fresh selects (fresh %.4fs for %d, cached %.4fs for %d)",
+    freshSeconds, freshRuns, cachedSeconds, cachedRuns),
+    freshSeconds > 0 and cachedSeconds * 3 < freshSeconds)
+  check("a cached quote matches the fresh whole-lot numbers",
+    freshQuote and cachedQuote
+    and freshQuote.purchasedUnits == cachedQuote.purchasedUnits
+    and freshQuote.cashRequired == cachedQuote.cashRequired
+    and freshQuote.economicConsumedCost == cachedQuote.economicConsumedCost
+    and freshQuote.complete == cachedQuote.complete)
+
+  local deepLevels = {}
+  for i = 1, 100 do
+    deepLevels[i] = { p = 500 + i * 25, q = 20, n = 2, s = 10 }
+  end
+  local deepStarted = os.clock()
+  local deepQuote = Lots.Quote(deepLevels, 40, { capital = 2000000 })
+  local deepSeconds = os.clock() - deepStarted
+  check(string.format("100-level lot select finished in %.4fs", deepSeconds),
+    type(deepQuote) == "table" and deepSeconds >= 0)
+
+  local awkward = {
+    { p = 9000, q = 1, n = 8, s = 1 },
+    { p = 4000, q = 21, n = 7, s = 3 },
+    { p = 2500, q = 35, n = 5, s = 7 },
+    { p = 1500, q = 40, n = 2, s = 20 },
+    { p = 800, q = 200, n = 1, s = 200 },
+  }
+  local awkwardStarted = os.clock()
+  local awkwardQuote = Lots.Quote(awkward, 18, { capital = 500000, freeSlots = 4, stackSize = 20, partialRoom = 0 })
+  local awkwardSeconds = os.clock() - awkwardStarted
+  check(string.format("awkward stack select finished in %.4fs", awkwardSeconds),
+    type(awkwardQuote) == "table" and awkwardQuote.complete == true and awkwardSeconds >= 0)
+
+  local confident = Lots.FlipConfidence({ auctions = 20, quantity = 100, sale = 100, unit = 80, age = 0 })
+  local wide = Lots.FlipConfidence({ auctions = 20, quantity = 100, sale = 100, unit = 10, age = 0 })
+  check("flip confidence stays below one", confident > 0 and confident < 1 and confident <= 0.9)
+  check("a wide flip spread lowers confidence", wide > 0 and wide < confident)
+
+  local Cache = OnyxiaGold.CandidateCache
+  local Rev = OnyxiaGold.Revisions
+  if Cache and Cache.Flips and Rev and Perf and DB then
+    Cache.marketRevision = Rev:Get("market")
+    Cache.recipeRevision = Rev:Get("recipe")
+    Cache.flips = { { itemID = 1, profit = 1 } }
+    local seen = Perf:Count("flipItems")
+    local cachedFlips = Cache:Flips()
+    check("a current candidate cache does not rediscover flips",
+      table.getn(cachedFlips) == 1 and Perf:Count("flipItems") == seen)
+    Rev:Bump("market")
+    check("a stale candidate cache does not scan the market",
+      table.getn(Cache:Flips()) == 0 and Perf:Count("flipItems") == seen)
+
+    local market = DB:EnsureMarketForWrite("Onyxia|Horde")
+    market.latest = {}
+    OnyxiaGoldDB.itemMeta = OnyxiaGoldDB.itemMeta or {}
+    local seeded = 5000
+    local nowStamp = os.time()
+    for itemID = 1, seeded do
+      market.latest[itemID] = {
+        itemID = itemID,
+        name = "Bench " .. tostring(itemID),
+        timestamp = nowStamp,
+        source = "scan",
+        buyoutAuctionCount = 1,
+        buyoutQuantity = 1,
+        depth = { { p = 1000, q = 1, n = 1, s = 1 } },
+        depthCoveredQuantity = 1,
+      }
+      OnyxiaGoldDB.itemMeta[itemID] = {
+        itemID = itemID,
+        name = "Bench " .. tostring(itemID),
+        quality = 1,
+        itemLevel = 1,
+        itemType = "Trade Goods",
+        vendorPrice = 100,
+      }
+    end
+    local walkStarted = os.clock()
+    Cache:DiscoverFlips()
+    local walkSeconds = os.clock() - walkStarted
+    check(string.format(
+      "flip discovery walked %d market rows in %.4fs",
+      seeded, walkSeconds),
+      Perf:Count("flipItems") >= seen + seeded and walkSeconds >= 0)
+    local wideSeen = Perf:Count("flipItems")
+    market.latest = {}
+    local wideSeeded = 10000
+    for itemID = 1, wideSeeded do
+      market.latest[itemID] = {
+        itemID = itemID,
+        name = "Wide " .. tostring(itemID),
+        timestamp = nowStamp,
+        source = "scan",
+        buyoutAuctionCount = 1,
+        buyoutQuantity = 1,
+        depth = { { p = 1000, q = 1, n = 1, s = 1 } },
+        depthCoveredQuantity = 1,
+      }
+      if not OnyxiaGoldDB.itemMeta[itemID] then
+        OnyxiaGoldDB.itemMeta[itemID] = {
+          itemID = itemID,
+          name = "Wide " .. tostring(itemID),
+          quality = 1,
+          itemLevel = 1,
+          itemType = "Trade Goods",
+          vendorPrice = 100,
+        }
+      end
+    end
+    local wideStarted = os.clock()
+    Cache:DiscoverFlips()
+    local wideSeconds = os.clock() - wideStarted
+    check(string.format(
+      "flip discovery walked %d market rows in %.4fs",
+      wideSeeded, wideSeconds),
+      Perf:Count("flipItems") >= wideSeen + wideSeeded and wideSeconds >= 0)
+    market.latest = {}
+  else
+    check("a current candidate cache does not rediscover flips", false)
+    check("a stale candidate cache does not scan the market", false)
+    check("flip discovery walked the seeded market", false)
+    check("flip discovery walked the wide market", false)
+  end
+
+  local Book = OnyxiaGold.RecipeBook
+  if Book and Book.MarginalCrafts then
+    local quoteCalls = 0
+    local kept = Book.MarginalCrafts({
+      reagents = { { itemID = 77, count = 1 } },
+    }, function(_, qty)
+      quoteCalls = quoteCalls + 1
+      return {
+        economicConsumedCost = qty * 100,
+        depthCoveredQuantity = 3,
+        complete = true,
+      }
+    end, 1000, 200)
+    check(string.format(
+      "marginal crafts stop at the covered depth (%d crafts, %d quotes)",
+      kept, quoteCalls),
+      kept == 3 and quoteCalls < 20)
+    local recipeStarted = os.clock()
+    local recipeOk = true
+    for _ = 1, 50 do
+      local crafts = Book.MarginalCrafts({
+        reagents = {
+          { itemID = 77, count = 2 },
+          { itemID = 78, count = 1 },
+        },
+      }, function(itemID, qty)
+        local each = itemID == 77 and 40 or 25
+        return {
+          economicConsumedCost = qty * each,
+          depthCoveredQuantity = itemID == 77 and 40 or 20,
+          complete = true,
+        }
+      end, 500, 200)
+      if crafts ~= 20 then
+        recipeOk = false
+      end
+    end
+    local recipeSeconds = os.clock() - recipeStarted
+    check(string.format(
+      "50 multi-reagent marginal passes finished in %.4fs",
+      recipeSeconds),
+      recipeOk and recipeSeconds >= 0)
+  else
+    check("marginal crafts stop at the covered depth", false)
+  end
+
+  local Stop = OnyxiaGold.AuctionStop
+  if Stop and Stop.PickListing then
+    local picked = Stop.PickListing({
+      { index = 1, count = 5, buyout = 50000, itemID = 9, name = "Ore", page = 0 },
+      { index = 2, count = 5, buyout = 40000, itemID = 9, name = "Ore", page = 1 },
+    }, 20000, 8)
+    check("live lot selection buys both stacks and keeps the cheaper page",
+      picked
+      and picked.purchasedUnits == 10
+      and picked.page == 1
+      and picked.count == 5
+      and picked.buyout == 40000)
+  else
+    check("live lot selection buys both stacks and keeps the cheaper page", false)
+  end
+
+  if Stop and Stop.InFlightCount and Rev then
+    Rev.plan = 1
+    Stop.inflight = { key = "buy:9", count = 20, planRevision = 1 }
+    local heldCount = Stop:InFlightCount({ buyItemID = 9 })
+    Rev:Bump("plan")
+    local dropped = Stop:InFlightCount({ buyItemID = 9 })
+    check("a new plan drops the previous in-flight buy",
+      heldCount == 20 and dropped == 0 and Stop.inflight == nil)
+  else
+    check("a new plan drops the previous in-flight buy", false)
+  end
+
+  local TradeLog = OnyxiaGold.TradeLog
+  if TradeLog and TradeLog.RecordBuyClick and DB then
+    DB:EnsureCharacterForWrite("Onyxia|Horde|Tester")
+    local beforeEntries = TradeLog:Entries()
+    local beforeCount = beforeEntries and table.getn(beforeEntries) or 0
+    TradeLog:RecordBuyClick(9, "Ore", 5, 1000, "bench")
+    local pendingDump = TradeLog:Dump()
+    local afterEntries = TradeLog:Entries()
+    local afterCount = afterEntries and table.getn(afterEntries) or 0
+    check("a buy click stays pending until the client confirms it",
+      TradeLog.pendingBuy
+      and TradeLog.pendingBuy.status == "PENDING_BUY"
+      and afterCount == beforeCount
+      and string.find(pendingDump, "ATTEMPTED", 1, true) ~= nil)
+    local confirmed = TradeLog:ConfirmPendingBuy(9, "Ore")
+    local confirmedEntries = TradeLog:Entries()
+    local confirmedCount = confirmedEntries and table.getn(confirmedEntries) or 0
+    local confirmedEntry = confirmedEntries and confirmedEntries[confirmedCount]
+    check("a won auction writes one confirmed buy",
+      confirmed
+      and TradeLog.pendingBuy == nil
+      and confirmedCount == beforeCount + 1
+      and confirmedEntry
+      and confirmedEntry.source == "confirmed"
+      and confirmedEntry.side == "buy")
+  else
+    check("a buy click stays pending until the client confirms it", false)
+    check("a won auction writes one confirmed buy", false)
+  end
+
+  local Log = OnyxiaGold.Log
+  if Log and Log.AppendLine and Log.OrderedLines then
+    OnyxiaGoldDB.log = { session = 1, lines = {} }
+    for i = 1, 805 do
+      Log:AppendLine("L" .. tostring(i))
+    end
+    local ordered = Log:OrderedLines()
+    check("the log ring keeps 800 lines and drops the oldest",
+      Log:Count() == 800
+      and ordered[1] == "L6"
+      and ordered[800] == "L805")
+  else
+    check("the log ring keeps 800 lines and drops the oldest", false)
+  end
+
+  if Schedule and Schedule.Tick then
+    local savedEvery = Schedule.yieldEvery
+    Schedule.yieldEvery = 1
+    Schedule.activeSlice = { steps = 0 }
+    local yields = 0
+    local worker = coroutine.create(function()
+      for _ = 1, 4 do
+        Schedule.Tick()
+      end
+    end)
+    local guard = 0
+    while coroutine.status(worker) ~= "dead" and guard < 20 do
+      guard = guard + 1
+      coroutine.resume(worker)
+      if coroutine.status(worker) ~= "dead" then
+        yields = yields + 1
+      end
+    end
+    Schedule.activeSlice = nil
+    Schedule.yieldEvery = savedEvery
+    check(string.format("the scheduler yields without a frame timer (%d yields)", yields),
+      yields >= 2)
+  else
+    check("the scheduler yields without a frame timer", false)
+  end
 end

@@ -2,10 +2,10 @@
   OnyxiaGold.TradeLog
   Per-character buys and sales inside OnyxiaGoldDB.
 
-  A buy click, an English "auction won" / "auction sold" system line, and
-  Auction House success mail are trades. Scans, snapshots, and expected
-  profit are not. Mail is only read. Nothing here takes mail, deletes mail,
-  posts an auction, or buys one.
+  A confirmed buy, an English "auction won" / "auction sold" system line, and
+  Auction House success mail are trades. A buy click is only an attempt.
+  Scans, snapshots, and expected profit are not trades. Mail is only read.
+  Nothing here takes mail, deletes mail, posts an auction, or buys one.
 
   A sale keeps the item, the quantity, the proceeds, and the time it sold.
   The auction-house cut and the deposit returned are stored only when the
@@ -18,6 +18,7 @@ OnyxiaGold = OnyxiaGold or {}
 OnyxiaGold.TradeLog = OnyxiaGold.TradeLog or {}
 
 local TradeLog = OnyxiaGold.TradeLog
+TradeLog.dirty = true
 
 local BUTTON_ECHO_SECONDS = 20
 local COPPER_PER_SILVER = 100
@@ -206,6 +207,14 @@ end
 
 function TradeLog:Dump()
   local lines = { self:TotalsLine() }
+  local pending = self.pendingBuy
+  if type(pending) == "table" and pending.name then
+    local state = pending.status or "PENDING_BUY"
+    if state == "PENDING_BUY" then
+      state = "ATTEMPTED"
+    end
+    table.insert(lines, state .. " BUY " .. tostring(pending.count or "") .. " " .. tostring(pending.name))
+  end
   local entries = self:Entries()
   if entries then
     for i = 1, table.getn(entries) do
@@ -216,8 +225,15 @@ function TradeLog:Dump()
 end
 
 function TradeLog:Touch()
-  if OnyxiaGold.UI and OnyxiaGold.UI.RefreshTrades then
-    OnyxiaGold.UI:RefreshTrades()
+  self.dirty = true
+  self.revision = (self.revision or 0) + 1
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Push then
+    local now = 0
+    if type(GetTime) == "function" then
+      now = tonumber(GetTime()) or 0
+    end
+    clock:Push(now, "ui", "trade")
   end
 end
 
@@ -318,7 +334,7 @@ function TradeLog.SameItem(entry, itemID, name)
   return false
 end
 
--- The convert sentence from the action row. Not the profit breakdown.
+-- A click is an attempt. It is not a realised buy until the client confirms it.
 function TradeLog:RecordBuyClick(itemID, name, count, copper, note)
   itemID = tonumber(itemID)
   if (type(name) ~= "string" or name == "") and itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName then
@@ -327,15 +343,62 @@ function TradeLog:RecordBuyClick(itemID, name, count, copper, note)
   if (type(name) ~= "string" or name == "") and itemID then
     name = "item:" .. tostring(itemID)
   end
-  self:Append({
-    side = "buy",
+  local stamp = 0
+  if type(time) == "function" then
+    stamp = time()
+  elseif os and os.time then
+    stamp = os.time()
+  end
+  self.pendingBuy = {
+    status = "PENDING_BUY",
+    t = stamp,
     name = name,
     itemID = itemID,
     count = count,
     copper = copper,
     note = note,
-    source = "button",
-  })
+  }
+  self.dirty = true
+  return self.pendingBuy
+end
+
+function TradeLog:ConfirmPendingBuy(itemID, name)
+  local pending = self.pendingBuy
+  if type(pending) ~= "table" then
+    return false
+  end
+  if not self.SameItem(pending, itemID, name) then
+    return false
+  end
+  local now = 0
+  if type(time) == "function" then
+    now = time()
+  elseif os and os.time then
+    now = os.time()
+  end
+  local age = now - (tonumber(pending.t) or now)
+  if age < 0 then
+    age = 0
+  end
+  if age > BUTTON_ECHO_SECONDS then
+    pending.status = "UNKNOWN"
+    self.dirty = true
+    return false
+  end
+  local entry = self:Append({
+    side = "buy",
+    name = pending.name,
+    itemID = pending.itemID,
+    count = pending.count,
+    copper = pending.copper,
+    note = pending.note,
+    source = "confirmed",
+  }, true)
+  if entry then
+    self.pendingBuy = nil
+  end
+  self.dirty = true
+  return entry ~= nil
 end
 
 function TradeLog.ParseCopper(text)
@@ -559,6 +622,9 @@ function TradeLog:OnSystemMessage(msg)
   end
   local parsed = self.ClassifySystemMessage(msg)
   if not parsed then
+    return
+  end
+  if parsed.side == "buy" and self:ConfirmPendingBuy(parsed.itemID, parsed.name) then
     return
   end
   if parsed.side == "buy" and self:ConsumeButtonBuy(parsed.itemID, parsed.name) then

@@ -290,10 +290,44 @@ function Book.MarginalCrafts(recipe, quote, net, cap)
   elseif limit > 200 then
     limit = 200
   end
+  local seenCovered = {}
+  local function boundedQuote(itemID, qty)
+    local known = seenCovered[itemID]
+    if known and qty > known then
+      return nil
+    end
+    local part = quote(itemID, qty)
+    if type(part) == "table" and part.depthCoveredQuantity and not seenCovered[itemID] then
+      seenCovered[itemID] = tonumber(part.depthCoveredQuantity)
+    end
+    return part
+  end
   local guard = 0
   while crafts < limit and guard < 200 do
     guard = guard + 1
-    local cost = costAt(recipe, quote, crafts + 1)
+    if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
+    end
+    if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+      OnyxiaGold.Performance:Add("recipeRows", 1)
+    end
+    local reagents = recipe and recipe.reagents
+    local pastDepth = false
+    if type(reagents) == "table" then
+      for i = 1, nitems(reagents) do
+        local row = reagents[i]
+        local known = row and seenCovered[row.itemID]
+        local per = row and tonumber(row.count) or 1
+        if known and (crafts + 1) * per > known then
+          pastDepth = true
+          break
+        end
+      end
+    end
+    if pastDepth then
+      break
+    end
+    local cost = costAt(recipe, boundedQuote, crafts + 1)
     if not cost then
       break
     end

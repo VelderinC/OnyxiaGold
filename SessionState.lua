@@ -47,6 +47,10 @@ function Session:Reset()
   self.freeSlots = nil
   self.stackSizes = {}
   self.basis = {}
+  self.generation = (self.generation or 0) + 1
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
+    OnyxiaGold.Lots.ClearQuoteCache()
+  end
 end
 
 Session:Reset()
@@ -575,6 +579,10 @@ function Session:Reserve(spec)
 
   for itemID, book in pairs(scratch) do
     self.depth[itemID] = book
+  end
+  self.generation = (self.generation or 0) + 1
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
+    OnyxiaGold.Lots.ClearQuoteCache()
   end
   self.bags = bags
   if type(self.bank) ~= "table" then

@@ -120,6 +120,7 @@ function Scanner:ResetRuntime()
 end
 
 function Scanner:SetStatus(text)
+  self.statusText = text
   if OnyxiaGold.UI and OnyxiaGold.UI.SetStatus then
     OnyxiaGold.UI:SetStatus(text)
   end
@@ -179,9 +180,24 @@ end
 
 function Scanner:NotifyScanProgress()
   local ui = OnyxiaGold.UI
-  if ui and ui.PaintScanProgress then
-    ui:PaintScanProgress()
+  if not ui or not ui.PaintScanProgress then
+    return
   end
+  local interval = 0.15
+  if OnyxiaGold.Config and OnyxiaGold.Config.ScanPaintInterval then
+    interval = tonumber(OnyxiaGold.Config.ScanPaintInterval) or 0.15
+  end
+  local now = 0
+  if type(GetTime) == "function" then
+    now = tonumber(GetTime()) or 0
+  end
+  local status = self.statusText or self.state
+  if self.lastPaintStatus == status and now - (self.lastPaintAt or 0) < interval then
+    return
+  end
+  self.lastPaintAt = now
+  self.lastPaintStatus = status
+  ui:PaintScanProgress()
 end
 
 local function beginScan(self, mode)
@@ -887,6 +903,10 @@ function Scanner:BeginFinalize()
   end
   self.finalizeIndex = 1
   self.state = STATE_FINALIZING
+  if OnyxiaGold.Database and OnyxiaGold.Database.BeginSnapshot then
+    local mode = self.mode == "quick" and "quick" or "full"
+    OnyxiaGold.Database:BeginSnapshot(mode)
+  end
   OnyxiaGold.Log:Debug("Scanner", "finalizing " .. tostring(table.getn(self.finalizeList)) .. " items")
   self:SetStatus("Calculating prices...")
 end
@@ -895,10 +915,32 @@ function Scanner:FinalizeSlice()
   local perFrame = OnyxiaGold.Config.FinalizeItemsPerFrame or 30
   local list = self.finalizeList
   local last = math.min(self.finalizeIndex + perFrame - 1, table.getn(list))
+  local started
+  if type(debugprofilestop) == "function" then
+    local now = debugprofilestop()
+    if type(now) == "number" then
+      started = now
+    end
+  end
+  local budget = 2
+  if OnyxiaGold.Config and OnyxiaGold.Config.SliceBudgetMs then
+    budget = tonumber(OnyxiaGold.Config.SliceBudgetMs) or 2
+  end
   for i = self.finalizeIndex, last do
-    local rec = self.aggregates[list[i]]
+    if started and type(debugprofilestop) == "function" then
+      local now = debugprofilestop()
+      if type(now) == "number" and now - started >= budget and i > self.finalizeIndex then
+        last = i - 1
+        break
+      end
+    end
+    local itemID = list[i]
+    local rec = self.aggregates[itemID]
     if rec then
       self:FinalizeItem(rec)
+      if OnyxiaGold.Database and OnyxiaGold.Database.WriteSnapshotItem then
+        OnyxiaGold.Database:WriteSnapshotItem(itemID, rec)
+      end
     end
   end
   self.finalizeIndex = last + 1
@@ -917,7 +959,10 @@ function Scanner:Complete()
     duration = duration,
     cacheMisses = self.cacheMisses,
   }
-  if self.mode == "quick" then
+  if OnyxiaGold.Database and OnyxiaGold.Database.batch and OnyxiaGold.Database.CommitSnapshot then
+    local kind = self.mode == "quick" and "quick" or "full"
+    OnyxiaGold.Database:CommitSnapshot(meta, kind)
+  elseif self.mode == "quick" then
     OnyxiaGold.Database:UpdateItems(self.aggregates, meta)
   else
     OnyxiaGold.Database:WriteFullSnapshot(self.aggregates, meta)
@@ -947,7 +992,7 @@ function Scanner:Complete()
     if type(GetTime) == "function" then
       now = tonumber(GetTime()) or 0
     end
-    clock:Push(now, "engine")
+    clock:Push(now, "market", "scan")
   elseif OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
     OnyxiaGold.OpportunityEngine:Refresh()
   end

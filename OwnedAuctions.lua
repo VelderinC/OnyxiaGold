@@ -159,6 +159,23 @@ function Owned:GetCurrentBids()
   return row and (tonumber(row.auctions.currentBids) or 0) or 0
 end
 
+function Owned:Fingerprint()
+  local row = rec()
+  local listings = row and row.auctions and row.auctions.listings
+  if type(listings) ~= "table" then
+    return "0"
+  end
+  local n = table.getn(listings)
+  local acc = n
+  for i = 1, n do
+    local listing = listings[i]
+    acc = acc + (tonumber(listing and listing.itemID) or 0)
+    acc = acc + (tonumber(listing and listing.count) or 0)
+    acc = acc + (tonumber(listing and listing.buyout) or 0)
+  end
+  return tostring(acc) .. ":" .. tostring(n)
+end
+
 function Owned:GetSnapshotAge()
   local row = rec()
   if not row or not row.auctions.timestamp then

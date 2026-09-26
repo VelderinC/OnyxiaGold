@@ -366,6 +366,13 @@ function Engine:Rank(list)
 end
 
 function Engine:Refresh()
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("engineRebuilds", 1)
+  end
+  if perf and perf.Begin then
+    perf:Begin("opportunity")
+  end
   OnyxiaGold.Log:Debug("Engine", "Refreshing opportunities")
   self.published = self.results
   if type(self.published) ~= "table" then
@@ -402,11 +409,11 @@ function Engine:Refresh()
   elseif n == 0 then
     OnyxiaGold.Log:Debug("Engine", "0 opportunities found")
   end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-    OnyxiaGold.ActionPlanner:Refresh()
+  if perf and perf.Add then
+    perf:Add("opportunities", n)
   end
-  if OnyxiaGold.UI and OnyxiaGold.UI.Refresh then
-    OnyxiaGold.UI:Refresh()
+  if perf and perf.End then
+    perf:End("opportunity")
   end
   return self.results
 end

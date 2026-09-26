@@ -341,6 +341,7 @@ function Stop.PickListing(rows, stopUnit, remaining)
           index = index,
           itemID = row and row.itemID,
           name = (row and row.name) or "",
+          page = row and row.page,
         })
       end
     end
@@ -360,11 +361,46 @@ function Stop.PickListing(rows, stopUnit, remaining)
     unit = lot.p,
     name = lot.name or "",
     itemID = lot.itemID,
+    page = lot.page,
+    purchasedUnits = quote.purchasedUnits,
+    incomplete = false,
   }, sawUnder
 end
 
-local function boughtKey(itemID, actionIndex)
-  return tostring(actionIndex or "") .. ":" .. tostring(itemID or "")
+function Stop:PlanKey(action)
+  if action and type(action.planKey) == "string" and action.planKey ~= "" then
+    return action.planKey
+  end
+  local itemID = action and (action.buyItemID or action.itemID)
+  if action and action.flip then
+    return "flip:" .. tostring(itemID)
+  end
+  return "buy:" .. tostring(itemID)
+end
+
+function Stop:CurrentPlanRevision()
+  local rev = OnyxiaGold.Revisions
+  if rev and rev.Get then
+    return rev:Get("plan")
+  end
+  local planner = OnyxiaGold.ActionPlanner
+  return planner and tonumber(planner.planRevision) or 0
+end
+
+-- A purchase belongs to the plan that issued it. A later plan already
+-- sees the bags, so the old count is not subtracted again.
+function Stop:InFlightCount(action)
+  local rev = self:CurrentPlanRevision()
+  local flight = self.inflight
+  if not flight or flight.planRevision ~= rev then
+    self.inflight = nil
+    return 0
+  end
+  local key = self:PlanKey(action)
+  if flight.key ~= key then
+    return 0
+  end
+  return tonumber(flight.count) or 0
 end
 
 function Stop:HouseOpen()
@@ -493,6 +529,57 @@ function Stop:PaintCaptured(rows)
   end
 end
 
+function Stop:ArmOffer(best)
+  self.offer = best
+  self.pendingOffer = nil
+  self.buyPhase = "armed"
+  self.buyStatus = "confirm"
+  if self.searchIncomplete then
+    best.incomplete = true
+    self.buyStatus = "confirm"
+  end
+  best.plannedCount = self.plannedCount
+  best.plannedUnit = self.plannedUnit
+  if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
+    OnyxiaGold.Log:Debug("AuctionStop", string.format(
+      "buy offer page=%s index=%d count=%d buyout=%d unit=%d remaining=%d purchased=%s",
+      tostring(best.page), best.index, best.count, best.buyout, best.unit, self.remaining or 0,
+      tostring(best.purchasedUnits)
+    ))
+  end
+  self:RefreshBuyRow()
+end
+
+function Stop:ArmFromCurrentPage()
+  local pending = self.pendingOffer
+  if not pending then
+    self.buyPhase = "idle"
+    self.buyStatus = "none"
+    self:RefreshBuyRow()
+    return
+  end
+  local rows = self:ReadLiveRows()
+  local match
+  for i = 1, table.getn(rows) do
+    local row = rows[i]
+    if row.count == pending.count and row.buyout == pending.buyout and row.itemID == pending.itemID then
+      match = row
+      break
+    end
+  end
+  if not match then
+    self.offer = nil
+    self.pendingOffer = nil
+    self.buyPhase = "idle"
+    self.buyStatus = "stale"
+    self:RefreshBuyRow()
+    return
+  end
+  pending.index = match.index
+  pending.page = self.page
+  self:ArmOffer(pending)
+end
+
 function Stop:ReadBuyPage()
   if not self:HouseOpen() then
     self.buyPhase = "idle"
@@ -518,49 +605,69 @@ function Stop:ReadBuyPage()
     self:RefreshBuyRow()
     return
   end
-  local rows = self:ReadLiveRows()
+  if self.buyPhase == "reposition" then
+    self:ArmFromCurrentPage()
+    return
+  end
   if self.buyPhase == "settle" then
+    self.liveLots = {}
+    self.buyPhase = "search"
+  end
+  if type(self.liveLots) ~= "table" then
+    self.liveLots = {}
+  end
+  local rows = self:ReadLiveRows()
+  if self.skipIndex then
     rows = self:DropSkipped(rows)
   end
-  local best, sawUnder = self.PickListing(rows, self.stopUnit, self.remaining)
+  local page = self.page or 0
+  for i = 1, table.getn(rows) do
+    local row = rows[i]
+    row.page = page
+    self.liveLots[table.getn(self.liveLots) + 1] = row
+  end
   self:PaintCaptured(self:CapturePageRows())
-  if best then
-    self.offer = best
-    self.buyPhase = "armed"
-    self.buyStatus = "confirm"
-    if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
-      OnyxiaGold.Log:Debug("AuctionStop", string.format(
-        "buy offer index=%d count=%d buyout=%d unit=%d remaining=%d",
-        best.index, best.count, best.buyout, best.unit, self.remaining or 0
-      ))
-    end
-  else
-    local pageSize = OnyxiaGold.Config and OnyxiaGold.Config.PageSize or 50
-    local full = listSize() >= pageSize
-    local cont, incomplete = false, false
-    if OnyxiaGold.Lots and OnyxiaGold.Lots.ShouldContinuePaging then
-      cont, incomplete = OnyxiaGold.Lots.ShouldContinuePaging(self.page or 0, PAGE_CAP, full)
-    end
-    if cont and self.queryName and self.queryName ~= "" and type(QueryAuctionItems) == "function" then
-      self.page = (self.page or 0) + 1
-      self.buyPhase = "search"
-      self.buyStatus = "search"
-      self.offer = nil
-      QueryAuctionItems(self.queryName, nil, nil, nil, nil, nil, self.page, nil, nil)
-      self:RefreshBuyRow()
-      return
-    end
+  local pageSize = OnyxiaGold.Config and OnyxiaGold.Config.PageSize or 50
+  local full = listSize() >= pageSize
+  local cont, incomplete = false, false
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.ShouldContinuePaging then
+    cont, incomplete = OnyxiaGold.Lots.ShouldContinuePaging(page, PAGE_CAP, full)
+  end
+  if cont and self.queryName and self.queryName ~= "" and type(QueryAuctionItems) == "function" then
+    self.page = page + 1
+    self.buyPhase = "search"
+    self.buyStatus = "search"
+    self.offer = nil
+    QueryAuctionItems(self.queryName, nil, nil, nil, nil, nil, self.page, nil, nil)
+    self:RefreshBuyRow()
+    return
+  end
+  self.searchIncomplete = incomplete and true or false
+  local collected = self.liveLots
+  self.liveLots = {}
+  local best = self.PickListing(collected, self.stopUnit, self.remaining)
+  if not best then
     self.offer = nil
     self.buyPhase = "idle"
-    if incomplete then
-      self.buyStatus = "incomplete"
-    elseif sawUnder then
-      self.buyStatus = "none"
-    else
-      self.buyStatus = "none"
-    end
+    self.buyStatus = incomplete and "incomplete" or "none"
+    self:RefreshBuyRow()
+    return
   end
-  self:RefreshBuyRow()
+  if self.searchIncomplete then
+    best.incomplete = true
+  end
+  local bestPage = tonumber(best.page) or page
+  if bestPage ~= page and type(QueryAuctionItems) == "function" then
+    self.pendingOffer = best
+    self.page = bestPage
+    self.buyPhase = "reposition"
+    self.buyStatus = "search"
+    self.offer = nil
+    QueryAuctionItems(self.queryName, nil, nil, nil, nil, nil, bestPage, nil, nil)
+    self:RefreshBuyRow()
+    return
+  end
+  self:ArmOffer(best)
 end
 
 function Stop:OnBuyList()
@@ -625,7 +732,13 @@ function Stop:RequestBuy(action)
     self.buyStatus = "none"
     return
   end
-  local bought = self.bought[boughtKey(self.itemID, action.index)] or 0
+  self.planKey = self:PlanKey(action)
+  self.plannedCount = tonumber(self.remaining) or 0
+  self.plannedUnit = tonumber(self.stopUnit) or 0
+  self.liveLots = {}
+  self.pendingOffer = nil
+  self.searchIncomplete = false
+  local bought = self:InFlightCount(action)
   self.remaining = (tonumber(self.remaining) or 0) - bought
   if self.remaining < 1 then
     self.paging = false
@@ -706,8 +819,20 @@ end
 
 function Stop:BeginSettle(bid)
   local count = tonumber(bid and bid.count) or 0
-  local key = boughtKey(self.itemID, self.buyActionIndex)
-  self.bought[key] = (self.bought[key] or 0) + count
+  local rev = self:CurrentPlanRevision()
+  local key = self.planKey or self:PlanKey({ buyItemID = self.itemID, flip = self.flipBuy })
+  local flight = self.inflight
+  if flight and flight.key == key and flight.planRevision == rev then
+    flight.count = (tonumber(flight.count) or 0) + count
+  else
+    self.inflight = {
+      key = key,
+      count = count,
+      planRevision = rev,
+      itemID = self.itemID,
+      status = "PENDING_BUY",
+    }
+  end
   self.remaining = (tonumber(self.remaining) or 0) - count
   if self.remaining < 0 then
     self.remaining = 0
@@ -871,18 +996,11 @@ function Stop:OnListUpdate()
     self:OnBuyList()
     return
   end
+  if self.postCheck then
+    self:FinishPostCheck()
+    return
+  end
   if not self.paging then
-    if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
-      return
-    end
-    local clock = OnyxiaGold.RefreshSchedule
-    if clock and clock.Push then
-      local now = 0
-      if type(GetTime) == "function" then
-        now = tonumber(GetTime()) or 0
-      end
-      clock:Push(now, "planner")
-    end
     return
   end
   if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
@@ -916,8 +1034,86 @@ function Stop:OnHouseShown()
     if type(GetTime) == "function" then
       now = tonumber(GetTime()) or 0
     end
-    clock:Push(now, "planner")
+    clock:Push(now, "ui", "ah-show")
   end
+end
+
+function Stop:BeginPostCheck(itemID, name)
+  itemID = tonumber(itemID)
+  if not itemID or type(name) ~= "string" or name == "" then
+    return false
+  end
+  if type(QueryAuctionItems) ~= "function" then
+    return false
+  end
+  if self:BuyListening() then
+    return false
+  end
+  self.postCheck = { itemID = itemID, name = name }
+  self.postCheckItem = itemID
+  self.paging = false
+  QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
+  return true
+end
+
+function Stop:FinishPostCheck()
+  if not self:ListReady() then
+    return
+  end
+  local check = self.postCheck
+  self.postCheck = nil
+  if not check then
+    return
+  end
+  local saved = self.itemID
+  self.itemID = check.itemID
+  local rows = self:ReadLiveRows()
+  self.itemID = saved
+  local minUnit
+  for i = 1, table.getn(rows) do
+    local row = rows[i]
+    local count = tonumber(row.count) or 0
+    local buyout = tonumber(row.buyout) or 0
+    if count > 0 and buyout > 0 then
+      local unit = math.floor(buyout / count)
+      if unit > 0 and (not minUnit or unit < minUnit) then
+        minUnit = unit
+      end
+    end
+  end
+  local now = 0
+  if type(GetTime) == "function" then
+    now = tonumber(GetTime()) or 0
+  elseif type(time) == "function" then
+    now = time()
+  end
+  self.livePost = {
+    itemID = check.itemID,
+    marketMinimum = minUnit,
+    at = now,
+  }
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Push then
+    clock:Push(now, "ui", "post-check")
+  end
+end
+
+function Stop:LivePostFresh(itemID)
+  local live = self.livePost
+  itemID = tonumber(itemID)
+  if not live or live.itemID ~= itemID or not live.marketMinimum then
+    return nil
+  end
+  local now = 0
+  if type(GetTime) == "function" then
+    now = tonumber(GetTime()) or 0
+  elseif type(time) == "function" then
+    now = time()
+  end
+  if now - (tonumber(live.at) or 0) > 20 then
+    return nil
+  end
+  return live
 end
 
 local frame = CreateFrame("Frame")
@@ -933,6 +1129,7 @@ frame:SetScript("OnEvent", function(_, event)
   elseif event == "AUCTION_HOUSE_CLOSED" then
     Stop.paging = false
     Stop.ignoreEmpty = false
+    Stop.postCheck = nil
     if Stop.buyActionIndex then
       Stop.buyPhase = "idle"
       Stop.offer = nil

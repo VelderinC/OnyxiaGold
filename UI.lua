@@ -17,14 +17,14 @@ local function skinCall(name)
   end
 end
 
-local function scheduleWork(kind)
+local function scheduleWork(kind, reason)
   local clock = OnyxiaGold.RefreshSchedule
   local now = 0
   if type(GetTime) == "function" then
     now = tonumber(GetTime()) or 0
   end
   if clock and clock.Push then
-    clock:Push(now, kind or "planner")
+    clock:Push(now, kind or "plan", reason)
     return true
   end
   return false
@@ -527,8 +527,11 @@ function UI:Create()
   refreshBtn:SetText("Refresh")
   refreshBtn:SetScript("OnClick", function()
     OnyxiaGold.Log:Debug("UI", "Refresh opportunities clicked")
-    if not scheduleWork("engine") and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
-      OnyxiaGold.OpportunityEngine:Refresh()
+    if not scheduleWork("market", "refresh") and OnyxiaGold.CandidateCache and OnyxiaGold.CandidateCache.Build then
+      OnyxiaGold.CandidateCache:Build()
+      if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+        OnyxiaGold.ActionPlanner:Refresh()
+      end
     end
   end)
 
@@ -587,8 +590,14 @@ function UI:Create()
     OnyxiaGoldDB.settings.transmuteMasterOverride = on
     OnyxiaGoldDB.settings.transmuteMaster = on
     OnyxiaGold.Log:Info("UI", "Transmute Master override " .. tostring(on))
-    if not scheduleWork("engine") and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
-      OnyxiaGold.OpportunityEngine:Refresh()
+    if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+      OnyxiaGold.Revisions:Bump("recipe")
+    end
+    if not scheduleWork("market", "transmute") and OnyxiaGold.CandidateCache and OnyxiaGold.CandidateCache.Build then
+      OnyxiaGold.CandidateCache:Build()
+      if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+        OnyxiaGold.ActionPlanner:Refresh()
+      end
     end
   end)
 
@@ -606,7 +615,7 @@ function UI:Create()
     local on = self:GetChecked() and true or false
     OnyxiaGoldDB.settings.showAboveSkill = on
     OnyxiaGold.Log:Info("UI", "Show above my skill " .. tostring(on))
-    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     OnyxiaGold.UI:Refresh()
@@ -626,7 +635,7 @@ function UI:Create()
     local on = self:GetChecked() and true or false
     OnyxiaGoldDB.settings.showBeyondGold = on
     OnyxiaGold.Log:Info("UI", "Show beyond my gold " .. tostring(on))
-    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     OnyxiaGold.UI:Refresh()
@@ -1624,13 +1633,23 @@ function UI:BuyStateText(state)
     return "The listing changed. Click the row to search again."
   elseif status == "done" then
     return "That row has the quantity it still needs."
+  elseif status == "incomplete" then
+    return "Search stopped at the page cap. This is not a global optimum."
   elseif status == "confirm" and state.offer then
     local offer = state.offer
     local name = offer.name
     if not name or name == "" then
       name = state.name or "Item"
     end
-    return string.format("%s x%d · %s", name, offer.count or 0, OnyxiaGold.FormatMoney(offer.buyout or 0))
+    local text = string.format("%s x%d · %s", name, offer.count or 0, OnyxiaGold.FormatMoney(offer.buyout or 0))
+    local planned = tonumber(offer.plannedCount)
+    if planned and planned > 0 and planned ~= (tonumber(offer.count) or 0) then
+      text = string.format("%s live x%d · planned x%d · %s", name, offer.count or 0, planned, OnyxiaGold.FormatMoney(offer.buyout or 0))
+    end
+    if offer.incomplete then
+      text = text .. " Page cap reached, so this is not a global optimum."
+    end
+    return text
   end
   return nil
 end
@@ -1816,7 +1835,28 @@ function UI:OnPostClick(row)
   end
   local record = OnyxiaGold.Prices and OnyxiaGold.Prices.GetRecord and OnyxiaGold.Prices:GetRecord(itemID)
   local external = record and record.source == "external"
+  local grossGuess = math.floor((tonumber(saleUnit) or 0) * stack + 0.5)
+  local highValue = grossGuess >= ((OnyxiaGold.Config and OnyxiaGold.Config.HighValuePostCopper) or 500000)
+  local live = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.LivePostFresh
+    and OnyxiaGold.AuctionStop:LivePostFresh(itemID)
+  if highValue and not live then
+    local postedName = itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName and OnyxiaGold.Data.GetItemName(itemID)
+    if type(postedName) ~= "string" or postedName == "" then
+      postedName = action.sortName or ""
+    end
+    local started = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.BeginPostCheck
+      and OnyxiaGold.AuctionStop:BeginPostCheck(itemID, postedName)
+    if started then
+      self:SetStatus("Checking the live Auction House page before this post.")
+    else
+      self:SetStatus("Need a live Auction House check before posting this stack.")
+    end
+    return
+  end
   local marketMin = OnyxiaGold.Prices and OnyxiaGold.Prices.GetMarketMinimum and OnyxiaGold.Prices:GetMarketMinimum(itemID)
+  if live and live.marketMinimum then
+    marketMin = live.marketMinimum
+  end
   local ownMin = OnyxiaGold.AuctionStop and OnyxiaGold.AuctionStop.OwnCheapestUnit
     and OnyxiaGold.AuctionStop.OwnCheapestUnit(itemID)
   local floorUnit = tonumber(action.economicFloor) or saleUnit
@@ -1831,7 +1871,7 @@ function UI:OnPostClick(row)
     stackSize = stack,
     stale = stale,
     external = external and true or false,
-    liveValidated = not stale and not external,
+    liveValidated = (not stale and not external) and ((not highValue) or live ~= nil),
   })
   local buyout = policy and policy.totalBuyout or math.floor(saleUnit * stack + 0.5)
   if action.flip and ownMin and policy and policy.targetPrice and policy.targetPrice < ownMin then
@@ -1850,7 +1890,7 @@ function UI:OnPostClick(row)
       self:SetStatus("Need a fresh market check before posting. Run a scan of this item, then click Post again.")
     elseif policy and action.stackBuyout and policy.totalBuyout ~= action.stackBuyout then
       self:SetStatus("Price changed. The row will refresh. Click Post again to list at the checked price.")
-      if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
         OnyxiaGold.ActionPlanner:Refresh()
       end
       self:Refresh()
@@ -1870,7 +1910,7 @@ function UI:OnPostClick(row)
     if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
       OnyxiaGold.Inventory:ScanBags()
     end
-    if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
       OnyxiaGold.ActionPlanner:Refresh()
     end
     self:Refresh()
@@ -1932,7 +1972,7 @@ function UI:OnPostClick(row)
   if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
     OnyxiaGold.Inventory:ScanBags()
   end
-  if not scheduleWork("planner") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+  if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
     OnyxiaGold.ActionPlanner:Refresh()
   end
   self:Refresh()
@@ -2164,7 +2204,41 @@ function UI:UpdateList()
   skinCall("PaintList")
 end
 
+function UI:PaintPerfLine()
+  local perf = OnyxiaGold.Performance
+  local show = perf and (perf.showHud or (OnyxiaGold.IsDebug and OnyxiaGold:IsDebug()))
+  if not self.perfLine and self.frame and self.frame.CreateFontString then
+    local fs = self.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetPoint("BOTTOMRIGHT", self.frame, "BOTTOMRIGHT", -28, 8)
+    fs:SetJustifyH("RIGHT")
+    self.perfLine = fs
+  end
+  if not self.perfLine then
+    return
+  end
+  if not show or not perf.HudLine then
+    self.perfLine:Hide()
+    return
+  end
+  self.perfLine:SetText(perf:HudLine())
+  self.perfLine:Show()
+end
+
+function UI:PaintTradesIfDirty()
+  local log = OnyxiaGold.TradeLog
+  if log and log.dirty then
+    self:RefreshTrades()
+  end
+end
+
 function UI:Refresh()
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("uiRefresh", 1)
+  end
+  if perf and perf.Begin then
+    perf:Begin("ui")
+  end
   if not self.frame then
     self:Create()
   end
@@ -2205,7 +2279,11 @@ function UI:Refresh()
     end
     self:UpdateList()
     self:PaintScanProgress()
-    self:RefreshTrades()
+    self:PaintTradesIfDirty()
+    self:PaintPerfLine()
+    if perf and perf.End then
+      perf:End("ui")
+    end
     return
   end
 
@@ -2274,12 +2352,23 @@ function UI:Refresh()
 
   self:UpdateList()
   self:PaintScanProgress()
-  self:RefreshTrades()
+  self:PaintTradesIfDirty()
+  self:PaintPerfLine()
+  if perf and perf.End then
+    perf:End("ui")
+  end
 end
 
 function UI:RefreshTrades()
   if not self.tradeEdit then
     return
+  end
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("tradeLogRebuilds", 1)
+  end
+  if perf and perf.Begin then
+    perf:Begin("tradeLog")
   end
   local text = ""
   local totals = "Spent 0c    Received 0c"
@@ -2312,6 +2401,12 @@ function UI:RefreshTrades()
   edit:SetHeight(math.max(minH, lines * 14 + 8))
   if self.tradeScroll and self.tradeScroll.UpdateScrollChildRect then
     self.tradeScroll:UpdateScrollChildRect()
+  end
+  if OnyxiaGold.TradeLog then
+    OnyxiaGold.TradeLog.dirty = false
+  end
+  if perf and perf.End then
+    perf:End("tradeLog")
   end
 end
 

@@ -1,9 +1,13 @@
 --[[
   OnyxiaGold.RefreshSchedule
-  Coalesce UI-thread rebuilds. A burst of auction, mail, bag, or profession
-  events schedules one refresh after the burst goes quiet. That refresh
-  runs in short slices so the client can paint between them. A second
-  pass is not started until the first one has finished and gone quiet.
+  One refresh architecture.
+
+  market: rebuild CandidateCache, then the personal plan, then paint.
+  plan: reallocate the current cache into a personal plan, then paint.
+  ui: paint execution state. No market discovery and no planner.
+
+  A stronger pending job replaces a weaker one. The work runs after the
+  burst goes quiet, in slices short enough for a 3.3.5 frame.
   Pure Lua 5.1. No WoW frame is created here.
 ]]
 
@@ -13,14 +17,46 @@ OnyxiaGold.RefreshSchedule = OnyxiaGold.RefreshSchedule or {}
 local Schedule = OnyxiaGold.RefreshSchedule
 
 Schedule.quiet = 0.75
-Schedule.budgetMs = 12
-Schedule.yieldEvery = 4
+Schedule.budgetMs = 2
+Schedule.warnMs = 4
+Schedule.yieldEvery = 8
 Schedule.pending = false
 Schedule.waiting = false
 Schedule.running = false
 Schedule.deadline = 0
-Schedule.wantEngine = false
-Schedule.wantPlanner = false
+Schedule.job = nil
+Schedule.reason = nil
+
+local RANK = {
+  ui = 1,
+  plan = 2,
+  market = 3,
+}
+
+local function normalize(kind)
+  if kind == "engine" or kind == "market" or kind == "MARKET_CANDIDATES" then
+    return "market"
+  end
+  if kind == "planner" or kind == "plan" or kind == "PERSONAL_PLAN" then
+    return "plan"
+  end
+  return "ui"
+end
+
+local function rankOf(kind)
+  return RANK[kind or ""] or 0
+end
+
+local function budgetMs()
+  local budget = tonumber(Schedule.budgetMs) or 2
+  if OnyxiaGold.Config and OnyxiaGold.Config.SliceBudgetMs then
+    budget = tonumber(OnyxiaGold.Config.SliceBudgetMs) or budget
+  end
+  if budget < 0.5 then
+    budget = 0.5
+  end
+  return budget
+end
 
 function Schedule.New(quiet)
   return setmetatable({
@@ -29,18 +65,28 @@ function Schedule.New(quiet)
     waiting = false,
     running = false,
     deadline = 0,
-    wantEngine = false,
-    wantPlanner = false,
+    job = nil,
+    reason = nil,
   }, { __index = Schedule })
 end
 
-function Schedule:Push(now, kind)
-  self.pending = true
-  if kind == "engine" then
-    self.wantEngine = true
-  else
-    self.wantPlanner = true
+function Schedule:Push(now, kind, reason)
+  kind = normalize(kind)
+  local nextRank = rankOf(kind)
+  local have = rankOf(self.job)
+  if self.job and nextRank < have then
+    return
   end
+  if kind == "plan" and OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+    OnyxiaGold.Revisions:Bump("character")
+  elseif kind == "ui" and OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+    OnyxiaGold.Revisions:Bump("ui")
+  end
+  self.job = kind
+  if type(reason) == "string" and reason ~= "" then
+    self.reason = reason
+  end
+  self.pending = true
   local quiet = tonumber(self.quiet) or 0.75
   if quiet < 0 then
     quiet = 0
@@ -66,9 +112,37 @@ function Schedule:Poll(now)
 end
 
 function Schedule:Finish(now)
+  if self.wallStart and type(GetTime) == "function" then
+    local elapsed = (tonumber(GetTime()) or 0) - self.wallStart
+    if elapsed < 0 then
+      elapsed = 0
+    end
+    local perf = OnyxiaGold.Performance
+    if perf and perf.AddTime then
+      perf:AddTime("wall", elapsed * 1000)
+    end
+  end
+  self.wallStart = nil
   self.running = false
   self.co = nil
   self.activeSlice = nil
+  local ran = self.ranJob
+  local ranRank = rankOf(ran)
+  local nextRank = rankOf(self.job)
+  local rev = OnyxiaGold.Revisions
+  local unchanged = true
+  if rev and rev.SameEconomics and self.revAtStart then
+    unchanged = rev:SameEconomics(self.revAtStart) and true or false
+  end
+  -- A market or plan pass already painted. A weaker request that arrived
+  -- during that pass is redundant when the revisions did not move.
+  if self.pending and unchanged and ranRank >= 2 and nextRank > 0 and nextRank < ranRank then
+    self.pending = false
+    self.job = nil
+    self.waiting = false
+    self.ranJob = nil
+    return
+  end
   if self.pending then
     self.waiting = true
     now = tonumber(now) or 0
@@ -78,6 +152,7 @@ function Schedule:Finish(now)
   else
     self.waiting = false
   end
+  self.ranJob = nil
 end
 
 function Schedule:RestorePartial()
@@ -98,9 +173,6 @@ function Schedule:RestorePartial()
   end
 end
 
--- Called from the hot loops. No work when a refresh is not sliced.
--- debugprofilestop is the 3.3.5 frame timer. The gap while this coroutine
--- is yielded is not counted, or the next tick would yield immediately.
 function Schedule.Tick()
   local slice = Schedule.activeSlice
   if not slice then
@@ -112,13 +184,16 @@ function Schedule.Tick()
       if not slice.mark then
         slice.mark = now
       end
-      local budget = tonumber(Schedule.budgetMs) or 12
-      if budget < 1 then
-        budget = 1
-      end
-      if now - slice.mark >= budget then
+      if now - slice.mark >= budgetMs() then
+        local perf = OnyxiaGold.Performance
+        if perf and perf.YieldPause then
+          perf:YieldPause()
+        end
         slice.mark = nil
         coroutine.yield()
+        if perf and perf.YieldResume then
+          perf:YieldResume()
+        end
         if type(debugprofilestop) == "function" then
           local again = debugprofilestop()
           if type(again) == "number" then
@@ -130,13 +205,20 @@ function Schedule.Tick()
     end
   end
   slice.steps = (slice.steps or 0) + 1
-  local every = tonumber(Schedule.yieldEvery) or 4
+  local every = tonumber(Schedule.yieldEvery) or 8
   if every < 1 then
     every = 1
   end
   if slice.steps % every == 0 then
     slice.steps = 0
+    local perf = OnyxiaGold.Performance
+    if perf and perf.YieldPause then
+      perf:YieldPause()
+    end
     coroutine.yield()
+    if perf and perf.YieldResume then
+      perf:YieldResume()
+    end
   end
 end
 
@@ -147,7 +229,26 @@ function Schedule:Advance(now)
   if not self.activeSlice then
     self.activeSlice = {}
   end
+  local started
+  if type(debugprofilestop) == "function" then
+    local mark = debugprofilestop()
+    if type(mark) == "number" then
+      started = mark
+      if not self.activeSlice.mark then
+        self.activeSlice.mark = mark
+      end
+    end
+  end
   local ok, err = coroutine.resume(self.co)
+  if started and type(debugprofilestop) == "function" then
+    local stopped = debugprofilestop()
+    if type(stopped) == "number" then
+      local perf = OnyxiaGold.Performance
+      if perf and perf.NoteSlice then
+        perf:NoteSlice(stopped - started)
+      end
+    end
+  end
   local dead = coroutine.status(self.co) == "dead"
   if not ok or dead then
     if not ok then
@@ -165,6 +266,25 @@ function Schedule:Advance(now)
   return "slice"
 end
 
+local function runJob(job)
+  if job == "market" then
+    local cache = OnyxiaGold.CandidateCache
+    if cache and cache.Build then
+      cache:Build()
+    elseif OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+      OnyxiaGold.OpportunityEngine:Refresh()
+    end
+  end
+  if job == "market" or job == "plan" then
+    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+      OnyxiaGold.ActionPlanner:Refresh()
+    end
+  end
+  if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
+    OnyxiaGold.UI:Refresh()
+  end
+end
+
 function Schedule:Begin(now)
   if self.co then
     return self:Advance(now)
@@ -179,21 +299,28 @@ function Schedule:Begin(now)
     self.deadline = (tonumber(now) or 0) + 0.25
     return "deferred"
   end
-  local engine = self.wantEngine and true or false
-  self.wantEngine = false
-  self.wantPlanner = false
+  local job = self.job or "ui"
+  local reason = self.reason
+  self.job = nil
+  self.reason = nil
+  self.ranJob = job
+  if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Snapshot then
+    self.revAtStart = OnyxiaGold.Revisions:Snapshot()
+  else
+    self.revAtStart = nil
+  end
+  local perf = OnyxiaGold.Performance
+  if perf and perf.NoteRefresh then
+    perf:NoteRefresh(job, reason)
+  end
+  if type(GetTime) == "function" then
+    self.wallStart = tonumber(GetTime()) or 0
+  else
+    self.wallStart = nil
+  end
   self.activeSlice = {}
   self.co = coroutine.create(function()
-    if engine and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
-      OnyxiaGold.OpportunityEngine:Refresh()
-      return
-    end
-    if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-      OnyxiaGold.ActionPlanner:Refresh()
-    end
-    if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
-      OnyxiaGold.UI:Refresh()
-    end
+    runJob(job)
   end)
   return self:Advance(now)
 end

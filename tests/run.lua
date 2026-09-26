@@ -6,6 +6,61 @@ if not table.getn then
 end
 
 OnyxiaGold = {}
+OnyxiaGold.DB_VERSION = 4
+OnyxiaGold.Config = {
+  AuctionHouseCut = 0.05,
+  PageSize = 50,
+  MaxHistoryPoints = 30,
+  MaxScanSummaries = 20,
+  MaxLogLines = 800,
+  MaxTradeLines = 400,
+  MaxDepthLevelsPerItem = 100,
+  QuickScanStaleSeconds = 600,
+  SliceBudgetMs = 2,
+  SliceWarnMs = 4,
+  HighValuePostCopper = 500000,
+}
+function OnyxiaGold:Debug()
+end
+function OnyxiaGold:Warn()
+end
+function OnyxiaGold:Print()
+end
+function OnyxiaGold:GetAuctionHouseCut()
+  return 0.05
+end
+function OnyxiaGold:GetAuctionHouseCutBPS()
+  return 500
+end
+
+function GetRealmName()
+  return "Onyxia"
+end
+
+function UnitFactionGroup()
+  return "Horde"
+end
+
+function UnitName()
+  return "Tester"
+end
+
+function time()
+  return os.time()
+end
+
+function date(fmt, when)
+  return os.date(fmt, when)
+end
+
+function CreateFrame()
+  return {
+    RegisterEvent = function() end,
+    SetScript = function() end,
+    Show = function() end,
+    Hide = function() end,
+  }
+end
 
 local root = arg and arg[0] or "tests/run.lua"
 root = string.gsub(root, "tests/run%.lua$", "")
@@ -24,6 +79,8 @@ local function load(path)
 end
 
 load("RefreshSchedule.lua")
+load("Revisions.lua")
+load("Performance.lua")
 load("Prices.lua")
 load("Lots.lua")
 load("Data/ItemGroups.lua")
@@ -32,6 +89,11 @@ load("SessionState.lua")
 load("RecipeBook.lua")
 load("SessionPlan.lua")
 load("TradeLog.lua")
+load("Database.lua")
+load("ItemInfo.lua")
+load("Log.lua")
+load("CandidateCache.lua")
+load("AuctionStop.lua")
 load("Tests.lua")
 
 local text, ok = OnyxiaGold.Tests:Run()

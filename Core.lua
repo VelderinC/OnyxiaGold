@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.41"
+OnyxiaGold.Version = "0.1.42"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -38,6 +38,12 @@ OnyxiaGold.Config = {
   useGetAll = false,
   -- Planner never deploys this fraction of liquid gold.
   CapitalReservePercent = 0.10,
+  -- One OnyxiaGold slice should stay inside a 3.3.5 frame.
+  SliceBudgetMs = 2,
+  SliceWarnMs = 4,
+  -- A post at or above this asks for a live page before StartAuction.
+  HighValuePostCopper = 500000,
+  ScanPaintInterval = 0.15,
   MailStaleSeconds = 600,
   AuctionStaleSeconds = 600,
   BankStaleSeconds = 86400,
@@ -276,14 +282,14 @@ function OnyxiaGold:ToggleDebug()
   end
 end
 
-local function scheduleWork(kind)
+local function scheduleWork(kind, reason)
   local clock = OnyxiaGold.RefreshSchedule
   local now = 0
   if type(GetTime) == "function" then
     now = tonumber(GetTime()) or 0
   end
   if clock and clock.Push then
-    clock:Push(now, kind or "planner")
+    clock:Push(now, kind or "plan", reason)
     return true
   end
   return false
@@ -324,10 +330,43 @@ function OnyxiaGold:HandleSlash(msg)
       end
     end
   elseif msg == "opportunities" or msg == "opp" then
-    if not scheduleWork("engine") and self.OpportunityEngine and self.OpportunityEngine.Refresh then
-      self.OpportunityEngine:Refresh()
+    if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+      OnyxiaGold.Revisions:Bump("recipe")
+    end
+    if not scheduleWork("market", "opportunities") and self.CandidateCache and self.CandidateCache.Build then
+      self.CandidateCache:Build()
+      if self.ActionPlanner and self.ActionPlanner.Refresh then
+        self.ActionPlanner:Refresh()
+      end
     end
     self.UI:Show()
+  elseif msg == "perf" or msg == "perf reset" then
+    local perf = self.Performance
+    if msg == "perf reset" then
+      if perf and perf.Reset then
+        perf:Reset()
+      end
+      self:Print("Performance counters cleared.", "Perf")
+    elseif perf and perf.Report then
+      perf.showHud = true
+      local text = perf:Report()
+      local startAt = 1
+      local length = string.len(text)
+      while startAt <= length do
+        local newline = string.find(text, "\n", startAt, true)
+        local line
+        if newline then
+          line = string.sub(text, startAt, newline - 1)
+          startAt = newline + 1
+        else
+          line = string.sub(text, startAt)
+          startAt = length + 1
+        end
+        if line ~= "" then
+          self:Print(line, "Perf")
+        end
+      end
+    end
   elseif msg == "debug" then
     self:ToggleDebug()
   elseif msg == "log" or string.sub(msg, 1, 4) == "log " then
@@ -356,11 +395,17 @@ function OnyxiaGold:HandleSlash(msg)
     else
       self:Print("Transmute Master manual override OFF. Using spellbook detection.")
     end
-    if not scheduleWork("engine") and self.OpportunityEngine and self.OpportunityEngine.Refresh then
-      self.OpportunityEngine:Refresh()
+    if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Bump then
+      OnyxiaGold.Revisions:Bump("recipe")
+    end
+    if not scheduleWork("market", "transmute") and self.CandidateCache and self.CandidateCache.Build then
+      self.CandidateCache:Build()
+      if self.ActionPlanner and self.ActionPlanner.Refresh then
+        self.ActionPlanner:Refresh()
+      end
     end
   else
-    self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og debug, /og log, /og reset, /og master")
+    self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og perf, /og debug, /og log, /og reset, /og master")
   end
 end
 

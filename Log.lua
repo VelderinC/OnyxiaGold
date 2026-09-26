@@ -155,6 +155,10 @@ function Log:ShouldEcho(levelName)
   return false
 end
 
+function Log:IsEnabled(levelName)
+  return self:ShouldStore(levelName) or self:ShouldEcho(levelName)
+end
+
 function Log:ShouldStore(levelName)
   local n = LEVEL[levelName] or LEVEL.DEBUG
   if n >= LEVEL.DEBUG then

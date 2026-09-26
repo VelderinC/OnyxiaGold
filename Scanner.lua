@@ -684,8 +684,31 @@ end
 
 function Scanner:ProcessSlice()
   local perFrame = OnyxiaGold.Config.AuctionsPerFrame or 25
-  local last = math.min(self.processIndex + perFrame - 1, self.batchCount)
-  for i = self.processIndex, last do
+  local budget = 0.85
+  if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.BudgetMs then
+    budget = OnyxiaGold.RefreshSchedule.BudgetMs()
+  elseif OnyxiaGold.Config and OnyxiaGold.Config.SliceBudgetMs then
+    budget = tonumber(OnyxiaGold.Config.SliceBudgetMs) or budget
+  end
+  local started
+  if type(debugprofilestop) == "function" then
+    local now = debugprofilestop()
+    if type(now) == "number" then
+      started = now
+    end
+  end
+  local processed = 0
+  local i = self.processIndex
+  local last = i - 1
+  while i <= self.batchCount and processed < perFrame do
+    if started and processed > 0 and processed % 4 == 0 and type(debugprofilestop) == "function" then
+      local now = debugprofilestop()
+      if type(now) == "number" and now - started >= budget then
+        break
+      end
+    end
+    last = i
+    processed = processed + 1
     local row, reason = self:ReadAuction(i)
     if row then
       if self.mode == "quick" and self.expectedItemID and row.itemID ~= self.expectedItemID then
@@ -699,6 +722,7 @@ function Scanner:ProcessSlice()
         OnyxiaGold.Log:Debug("Scanner", "item cache miss at index " .. tostring(i) .. " page=" .. tostring(self.page))
       end
     end
+    i = i + 1
   end
   self.processIndex = last + 1
 
@@ -800,6 +824,73 @@ function Scanner:FinishQuickItem()
   end
 end
 
+local function depthLess(a, b)
+  if a.p == b.p then
+    return (a.s or 0) < (b.s or 0)
+  end
+  return a.p < b.p
+end
+
+-- Exact cheapest-first order. Large books merge in passes so a page can yield.
+local function yieldSort(list)
+  local n = table.getn(list)
+  if n <= 200 then
+    table.sort(list, depthLess)
+    return list
+  end
+  local src = list
+  local dst = {}
+  local width = 1
+  while width < n do
+    local index = 1
+    while index <= n do
+      local mid = index + width
+      local right = index + width * 2
+      if mid > n + 1 then
+        mid = n + 1
+      end
+      if right > n + 1 then
+        right = n + 1
+      end
+      local a = index
+      local b = mid
+      local writeAt = index
+      while a < mid and b < right do
+        if depthLess(src[b], src[a]) then
+          dst[writeAt] = src[b]
+          b = b + 1
+        else
+          dst[writeAt] = src[a]
+          a = a + 1
+        end
+        writeAt = writeAt + 1
+      end
+      while a < mid do
+        dst[writeAt] = src[a]
+        a = a + 1
+        writeAt = writeAt + 1
+      end
+      while b < right do
+        dst[writeAt] = src[b]
+        b = b + 1
+        writeAt = writeAt + 1
+      end
+      index = index + width * 2
+    end
+    src, dst = dst, src
+    width = width * 2
+    if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
+    end
+  end
+  if src ~= list then
+    for i = 1, n do
+      list[i] = src[i]
+    end
+  end
+  return list
+end
+
 -- Full runtime book, cheapest first. Not yet truncated.
 function Scanner:SortedDepth(levelMap)
   local list = {}
@@ -813,13 +904,7 @@ function Scanner:SortedDepth(levelMap)
       table.insert(list, { p = price, q = bucket, n = 1 })
     end
   end
-  table.sort(list, function(a, b)
-    if a.p == b.p then
-      return (a.s or 0) < (b.s or 0)
-    end
-    return a.p < b.p
-  end)
-  return list
+  return yieldSort(list)
 end
 
 -- Keep only the cheapest persisted acquisition levels.

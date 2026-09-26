@@ -50,7 +50,7 @@ function ItemInfo:Capture(itemID)
   return rec
 end
 
-function ItemInfo:Get(itemID)
+function ItemInfo:Peek(itemID)
   itemID = tonumber(itemID)
   if not itemID then
     return nil
@@ -58,6 +58,30 @@ function ItemInfo:Get(itemID)
   local root = metaRoot()
   local cached = root and root[itemID]
   if cached and cached.quality and cached.itemLevel then
+    return cached
+  end
+  return nil
+end
+
+-- A miss is recorded once. It does not call GetItemInfo.
+function ItemInfo:Queue(itemID)
+  itemID = tonumber(itemID)
+  if not itemID or self:Peek(itemID) then
+    return
+  end
+  if not self.pending then
+    self.pending = {}
+  end
+  self.pending[itemID] = true
+end
+
+function ItemInfo:Get(itemID)
+  itemID = tonumber(itemID)
+  if not itemID then
+    return nil
+  end
+  local cached = self:Peek(itemID)
+  if cached then
     return cached
   end
   return self:Capture(itemID)

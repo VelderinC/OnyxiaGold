@@ -28,6 +28,13 @@ OnyxiaGold.SessionState = OnyxiaGold.SessionState or {}
 local Session = OnyxiaGold.SessionState
 
 function Session:Reset()
+  if type(self.depth) == "table" and OnyxiaGold.Lots and OnyxiaGold.Lots.DropBook then
+    for _, book in pairs(self.depth) do
+      if type(book) == "table" and book.id ~= nil then
+        OnyxiaGold.Lots.DropBook(book.id)
+      end
+    end
+  end
   self.active = false
   self.cash = 0
   self.spent = 0
@@ -48,9 +55,6 @@ function Session:Reset()
   self.stackSizes = {}
   self.basis = {}
   self.generation = (self.generation or 0) + 1
-  if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
-    OnyxiaGold.Lots.ClearQuoteCache()
-  end
 end
 
 Session:Reset()
@@ -209,6 +213,9 @@ function Session:EnsureDepth(itemID)
   end
   local levels, sum = cloneCoveredDepth(src, covered)
   book = { levels = levels, covered = sum }
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.AssignBook then
+    OnyxiaGold.Lots.AssignBook(book)
+  end
   self.depth[itemID] = book
   return book
 end
@@ -329,6 +336,14 @@ function Session:QuoteBook(book, quantity, capital, itemID)
     capital = self.cash
   end
   local constraints = self:BuyConstraints(itemID, capital)
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.AssignBook then
+    OnyxiaGold.Lots.AssignBook(book)
+  end
+  if book and book.id ~= nil then
+    constraints.bookID = book.id
+    constraints.bookGeneration = book.generation or 0
+  end
+  constraints.covered = book.covered or 0
   local quote
   if OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
     quote = OnyxiaGold.Lots.Quote(book.levels, quantity, constraints)
@@ -347,7 +362,9 @@ function Session:QuoteBook(book, quantity, capital, itemID)
       filledQuantity = 0,
     }
   end
-  quote.depthCoveredQuantity = book.covered or 0
+  if quote.depthCoveredQuantity == nil then
+    quote.depthCoveredQuantity = book.covered or 0
+  end
   return quote
 end
 
@@ -391,7 +408,18 @@ local function copyBook(book)
       s = lvl.s,
     }
   end
-  return { levels = levels, covered = book and book.covered or 0 }
+  local copy = { levels = levels, covered = book and book.covered or 0 }
+  if book and book.id ~= nil then
+    copy.id = book.id
+    copy.generation = book.generation or 0
+  elseif OnyxiaGold.Lots and OnyxiaGold.Lots.AssignBook then
+    OnyxiaGold.Lots.AssignBook(copy)
+  end
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("depthBookClones", 1)
+  end
+  return copy
 end
 
 local function consumeLots(book, selected)
@@ -458,11 +486,33 @@ function Session:Reserve(spec)
   local lines = reservationLines(spec)
   local normalized = {}
   local scratch = {}
-  local beforeBags = {}
-  local bags = {}
-  for itemID, count in pairs(self.bags or {}) do
-    beforeBags[itemID] = count
-    bags[itemID] = count
+  local bagDelta = {}
+  local oldBag = {}
+  local function bagNow(itemID)
+    if not itemID then
+      return 0
+    end
+    if bagDelta[itemID] ~= nil then
+      if bagDelta[itemID] == false then
+        return 0
+      end
+      return bagDelta[itemID]
+    end
+    return (self.bags and self.bags[itemID]) or 0
+  end
+  local function setBag(itemID, count)
+    if not itemID then
+      return
+    end
+    if oldBag[itemID] == nil then
+      local had = self.bags and self.bags[itemID]
+      oldBag[itemID] = had or false
+    end
+    if count and count > 0 then
+      bagDelta[itemID] = count
+    else
+      bagDelta[itemID] = false
+    end
   end
   local bankTake = {}
   local mailTake = {}
@@ -480,10 +530,10 @@ function Session:Reserve(spec)
       return false
     end
     if ownedUnits > 0 then
-      if not itemID or (bags[itemID] or 0) < ownedUnits then
+      if not itemID or bagNow(itemID) < ownedUnits then
         return false
       end
-      bags[itemID] = bags[itemID] - ownedUnits
+      setBag(itemID, bagNow(itemID) - ownedUnits)
     end
     if bankUnits > 0 then
       local already = bankTake[itemID] or 0
@@ -533,10 +583,10 @@ function Session:Reserve(spec)
       quotedCash = quotedCash + part
       leftCash = leftCash - part
       buyCount = buyCount + 1
-      bags[itemID] = (bags[itemID] or 0) + purchased - consumed
+      setBag(itemID, bagNow(itemID) + purchased - consumed)
     end
-    if bags[itemID] and bags[itemID] <= 0 then
-      bags[itemID] = nil
+    if itemID and bagNow(itemID) <= 0 then
+      setBag(itemID, 0)
     end
     table.insert(normalized, {
       itemID = itemID,
@@ -577,14 +627,31 @@ function Session:Reserve(spec)
     end
   end
 
+  local perf = OnyxiaGold.Performance
+  if perf and perf.Add then
+    perf:Add("sessionReserves", 1)
+  end
   for itemID, book in pairs(scratch) do
+    local oldGen = book.generation or 0
+    book.generation = oldGen + 1
+    if book.id ~= nil and OnyxiaGold.Lots and OnyxiaGold.Lots.DropGeneration then
+      OnyxiaGold.Lots.DropGeneration(book.id, oldGen)
+    end
     self.depth[itemID] = book
+    if perf and perf.Add then
+      perf:Add("depthBooksMutated", 1)
+    end
   end
-  self.generation = (self.generation or 0) + 1
-  if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
-    OnyxiaGold.Lots.ClearQuoteCache()
+  if type(self.bags) ~= "table" then
+    self.bags = {}
   end
-  self.bags = bags
+  for itemID, count in pairs(bagDelta) do
+    if count == false then
+      self.bags[itemID] = nil
+    else
+      self.bags[itemID] = count
+    end
+  end
   if type(self.bank) ~= "table" then
     self.bank = {}
   end
@@ -608,18 +675,16 @@ function Session:Reserve(spec)
     end
   end
   if self.freeSlots ~= nil then
-    local seen = {}
-    for itemID in pairs(beforeBags) do
-      seen[itemID] = true
-    end
-    for itemID in pairs(bags) do
-      seen[itemID] = true
-    end
-    for itemID in pairs(seen) do
+    for itemID, previous in pairs(oldBag) do
       local stack = self:StackSize(itemID)
       if stack and stack > 0 then
-        local oldSlots = stacksOccupied(beforeBags[itemID], stack)
-        local newSlots = stacksOccupied(bags[itemID], stack)
+        local oldCount = previous
+        if oldCount == false then
+          oldCount = 0
+        end
+        local newCount = self.bags[itemID] or 0
+        local oldSlots = stacksOccupied(oldCount, stack)
+        local newSlots = stacksOccupied(newCount, stack)
         self.heldSlots = (self.heldSlots or 0) + (newSlots - oldSlots)
       end
     end

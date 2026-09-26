@@ -113,6 +113,18 @@ end
 -- His cheapest buyout for this item, in copper per unit. Nil if he has none.
 function Stop.OwnCheapestUnit(itemID)
   itemID = tonumber(itemID)
+  local owned = OnyxiaGold.OwnedAuctions
+  if itemID and owned and owned.GetCheapestUnit then
+    local indexed = owned:GetCheapestUnit(itemID)
+    if indexed then
+      return indexed
+    end
+    local row = OnyxiaGold.Database and OnyxiaGold.Database.GetCharacter and OnyxiaGold.Database:GetCharacter()
+    local indexedMap = row and row.auctions and row.auctions.cheapestUnitByItemID
+    if type(indexedMap) == "table" then
+      return nil
+    end
+  end
   local row = OnyxiaGold.Database and OnyxiaGold.Database.GetCharacter and OnyxiaGold.Database:GetCharacter()
   local listings = row and row.auctions and row.auctions.listings
   if not itemID or type(listings) ~= "table" then

@@ -30,6 +30,18 @@ local function scheduleWork(kind, reason)
   return false
 end
 
+local function setText(widget, text)
+  if not widget or not widget.SetText then
+    return
+  end
+  text = text or ""
+  if widget.ogText == text then
+    return
+  end
+  widget.ogText = text
+  widget:SetText(text)
+end
+
 local FRAME_WIDTH = 1080
 local FRAME_HEIGHT = 884
 local MIN_WIDTH = 1080
@@ -1201,7 +1213,7 @@ function UI:PaintAuctionPage(page)
         button.ogStopLine = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
       end
       if button.ogStopLine and button.ogStopLine.SetText then
-        button.ogStopLine:SetText(row and row.line or "")
+        setText(button.ogStopLine, row and row.line or "")
       end
     end
   end
@@ -1684,8 +1696,8 @@ function UI:PaintBuyRow(row, action)
     end
   end
   local text = self:BuyStateText(state)
-  if text and text ~= "" then
-    row.cells.name:SetText(tostring(action.index) .. ". " .. text)
+  if text and text ~= "" and row.cells and row.cells.name then
+    setText(row.cells.name, tostring(action.index) .. ". " .. text)
   end
   if state.status == "confirm" and button then
     button:Show()
@@ -1969,13 +1981,20 @@ function UI:OnPostClick(row)
       itemID, postCount, bid, buyout, duration
     ))
   end
-  if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
-    OnyxiaGold.Inventory:ScanBags()
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.NoteTransaction then
+    local now = 0
+    if type(GetTime) == "function" then
+      now = tonumber(GetTime()) or 0
+    end
+    clock:NoteTransaction(now)
   end
-  if not scheduleWork("plan") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+  if OnyxiaGold.CharacterState and OnyxiaGold.CharacterState.MarkBagsDirty then
+    OnyxiaGold.CharacterState:MarkBagsDirty()
+  end
+  if not scheduleWork("plan", "post") and OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
     OnyxiaGold.ActionPlanner:Refresh()
   end
-  self:Refresh()
   local postedName = itemID and OnyxiaGold.Data.GetItemName(itemID) or "item"
   self:SetStatus(string.format("Posted %d %s.", postCount, postedName))
 end

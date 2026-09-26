@@ -348,13 +348,55 @@ local function emptyQuote(quantity)
   }
 end
 
+-- Normalised once per item per market revision. Quotes read this book.
+-- It is runtime memory, not a SavedVariables field.
+function Prices:AcquisitionBook(itemID)
+  itemID = tonumber(itemID)
+  local live = record(itemID)
+  if not itemID or not live or live.source == "external" then
+    return nil
+  end
+  local rev = 0
+  if OnyxiaGold.Revisions and OnyxiaGold.Revisions.Get then
+    rev = OnyxiaGold.Revisions:Get("market")
+  end
+  if self.booksRev ~= rev then
+    self.books = {}
+    self.booksRev = rev
+    if OnyxiaGold.Lots and OnyxiaGold.Lots.ClearQuoteCache then
+      OnyxiaGold.Lots.ClearQuoteCache()
+    end
+  end
+  local books = self.books or {}
+  self.books = books
+  local book = books[itemID]
+  if book and book.marketRevision == rev then
+    return book
+  end
+  local covered = self:GetDepthCoveredQuantity(itemID)
+  local levels = depthWithinCoverage(self:GetDepth(itemID), covered)
+  book = {
+    levels = levels,
+    covered = covered,
+    marketRevision = rev,
+    itemID = itemID,
+    generation = 0,
+  }
+  if OnyxiaGold.Lots and OnyxiaGold.Lots.AssignBook then
+    OnyxiaGold.Lots.AssignBook(book)
+  end
+  books[itemID] = book
+  return book
+end
+
 function Prices:GetAcquisitionQuote(itemID, quantity, constraints)
   quantity = math.floor(tonumber(quantity) or 0)
   local live = record(itemID)
   if live and live.source == "external" then
     return emptyQuote(quantity)
   end
-  local covered = self:GetDepthCoveredQuantity(itemID)
+  local book = self:AcquisitionBook(itemID)
+  local covered = book and book.covered or self:GetDepthCoveredQuantity(itemID)
   if quantity <= 0 then
     local quote = emptyQuote(quantity)
     quote.complete = true
@@ -362,17 +404,27 @@ function Prices:GetAcquisitionQuote(itemID, quantity, constraints)
     quote.depthCoveredQuantity = covered
     return quote
   end
-  local depth = depthWithinCoverage(self:GetDepth(itemID), covered)
+  constraints = constraints or {}
+  if book then
+    constraints.bookID = book.id
+    constraints.bookGeneration = book.generation or 0
+    constraints.covered = covered
+  end
   local quote
-  if OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
-    quote = OnyxiaGold.Lots.Quote(depth, quantity, constraints)
+  if book and OnyxiaGold.Lots and OnyxiaGold.Lots.Quote then
+    quote = OnyxiaGold.Lots.Quote(book.levels, quantity, constraints)
   else
     quote = emptyQuote(quantity)
   end
-  quote.depthCoveredQuantity = covered
-  quote.requestedQuantity = quantity
-  if OnyxiaGold.Log and OnyxiaGold.Log.Trace then
-    OnyxiaGold.Log:Trace("Prices", string.format(
+  if quote.depthCoveredQuantity == nil then
+    quote.depthCoveredQuantity = covered
+  end
+  if quote.requestedQuantity == nil then
+    quote.requestedQuantity = quantity
+  end
+  local log = OnyxiaGold.Log
+  if log and log.IsEnabled and log:IsEnabled("TRACE") and log.Trace then
+    log:Trace("Prices", string.format(
       "quote item=%s qty=%d bought=%s consumed=%s cash=%s economic=%s complete=%s",
       tostring(itemID), quantity, tostring(quote.purchasedUnits),
       tostring(quote.consumedUnits), tostring(quote.cashRequired),
@@ -423,16 +475,31 @@ function Prices:GetMaxProfitableBatches(itemID, unitsPerBatch, netPerBatch)
     return nil
   end
 
+  local maxBatches = math.floor(covered / unitsPerBatch)
+  if maxBatches > 200 then
+    maxBatches = 200
+  end
+  if maxBatches < 1 then
+    return nil
+  end
+  local maxQty = maxBatches * unitsPerBatch
+  local quote = self:GetAcquisitionQuote(itemID, maxQty, { frontierMax = maxQty })
+  local frontier = quote and quote.frontier
+  if type(frontier) ~= "table" then
+    return nil
+  end
+
   local batches = 0
   local previous = 0
   local guard = 0
-  while guard < 200 do
+  while guard < maxBatches do
     guard = guard + 1
-    local qty = (batches + 1) * unitsPerBatch
-    if qty > covered then
-      break
+    if guard % 16 == 0 and OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
     end
-    local economic = self:GetEconomicAcquisitionCost(itemID, qty)
+    local qty = guard * unitsPerBatch
+    local row = frontier[qty]
+    local economic = row and tonumber(row.economic)
     if not economic then
       break
     end
@@ -440,17 +507,19 @@ function Prices:GetMaxProfitableBatches(itemID, unitsPerBatch, netPerBatch)
     if marginal >= netPerBatch then
       break
     end
-    batches = batches + 1
+    batches = guard
     previous = economic
   end
 
   if batches <= 0 then
     return nil
   end
+  local firstRow = frontier[unitsPerBatch]
+  local firstCost = firstRow and tonumber(firstRow.economic) or 0
   return {
     batches = batches,
-    firstCost = self:GetEconomicAcquisitionCost(itemID, unitsPerBatch),
-    firstProfit = netPerBatch - (self:GetEconomicAcquisitionCost(itemID, unitsPerBatch) or 0),
+    firstCost = firstCost,
+    firstProfit = netPerBatch - firstCost,
     totalCost = previous,
     totalProfit = batches * netPerBatch - previous,
     averageUnitCost = math.floor(previous / (batches * unitsPerBatch)),

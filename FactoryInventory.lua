@@ -63,6 +63,19 @@ function Factory:Rows()
   if not character then
     return rows
   end
+  local rev = OnyxiaGold.Revisions
+  local snap = rev and rev.Snapshot and rev:Snapshot() or {}
+  local name = character.identity and character.identity.name or ""
+  local key = table.concat({
+    tostring(name),
+    tostring(snap.character or 0),
+    tostring(snap.candidate or 0),
+    tostring(snap.market or 0),
+    tostring(snap.plan or 0),
+  }, ":")
+  if self.cacheKey == key and type(self.cacheRows) == "table" then
+    return self.cacheRows
+  end
   local actions = {}
   if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.GetActions then
     actions = OnyxiaGold.ActionPlanner:GetActions() or {}
@@ -89,5 +102,7 @@ function Factory:Rows()
     end
     return tostring(a.place) < tostring(b.place)
   end)
+  self.cacheKey = key
+  self.cacheRows = rows
   return rows
 end

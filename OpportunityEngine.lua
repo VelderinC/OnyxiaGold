@@ -319,9 +319,20 @@ function Engine:CollectFrom(engine, name)
     OnyxiaGold.Log:Debug("Engine", tostring(name or "?") .. " missing Collect()")
     return
   end
-  local ok, list = pcall(function()
-    return engine:Collect()
-  end)
+  local schedule = OnyxiaGold.RefreshSchedule
+  if schedule and schedule.Tick then
+    schedule.Tick()
+  end
+  -- A sliced refresh must be able to yield. Lua 5.1 cannot yield through pcall.
+  local ok, list
+  if schedule and schedule.activeSlice then
+    ok = true
+    list = engine:Collect()
+  else
+    ok, list = pcall(function()
+      return engine:Collect()
+    end)
+  end
   if not ok then
     OnyxiaGold.Log:Error("Engine", tostring(name) .. " Collect() error: " .. tostring(list))
     return
@@ -356,6 +367,11 @@ end
 
 function Engine:Refresh()
   OnyxiaGold.Log:Debug("Engine", "Refreshing opportunities")
+  self.published = self.results
+  if type(self.published) ~= "table" then
+    self.published = {}
+  end
+  self.building = true
   self.results = {}
   self:CollectFrom(OnyxiaGold.Engines.Essence, "Essence")
   self:CollectFrom(OnyxiaGold.Engines.Shards, "Shards")
@@ -364,6 +380,8 @@ function Engine:Refresh()
   self:CollectFrom(OnyxiaGold.Engines.Crafting, "Crafting")
   self:CollectFrom(OnyxiaGold.Engines.Farming, "Farming")
   self:Rank(self.results)
+  self.published = self.results
+  self.building = false
   local n = table.getn(self.results)
   local top
   for i = 1, n do
@@ -394,5 +412,8 @@ function Engine:Refresh()
 end
 
 function Engine:GetResults()
+  if self.building and type(self.published) == "table" then
+    return self.published
+  end
   return self.results or {}
 end

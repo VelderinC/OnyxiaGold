@@ -17,6 +17,13 @@ OnyxiaGold.Engines.Disenchant = OnyxiaGold.Engines.Disenchant or {}
 
 local Disenchant = OnyxiaGold.Engines.Disenchant
 
+local function sliceTick()
+  local schedule = OnyxiaGold.RefreshSchedule
+  if schedule and schedule.Tick then
+    schedule.Tick()
+  end
+end
+
 local function expectedGross(outcomes)
   local prices = OnyxiaGold.Prices
   local total = 0
@@ -197,6 +204,7 @@ function Disenchant:Collect()
     return out
   end
   for itemID, count in pairs(bags) do
+    sliceTick()
     local meta = OnyxiaGold.ItemInfo:Get(itemID)
     local ok, opp = pcall(function()
       return self:EvaluateOwned(itemID, count, meta)

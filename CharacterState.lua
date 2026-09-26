@@ -81,6 +81,47 @@ local function marketHasData()
   return type(market) == "table" and type(market.latest) == "table" and next(market.latest) ~= nil
 end
 
+local function nowSeconds()
+  if type(GetTime) == "function" then
+    return tonumber(GetTime()) or 0
+  end
+  return 0
+end
+
+-- Queue one rebuild. Event handlers must not run it on the UI thread.
+local function scheduleRefresh(kind)
+  if kind ~= "engine" then
+    if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
+      if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.RefreshHeader then
+        OnyxiaGold.UI:RefreshHeader()
+      end
+      return
+    end
+  end
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Push then
+    clock:Push(nowSeconds(), kind or "planner")
+    return
+  end
+  if kind == "engine" and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
+    OnyxiaGold.OpportunityEngine:Refresh()
+    return
+  end
+  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
+    OnyxiaGold.ActionPlanner:Refresh()
+  end
+  if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
+    OnyxiaGold.UI:Refresh()
+  end
+end
+
+local function pumpRefresh()
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.Begin then
+    clock:Begin(nowSeconds())
+  end
+end
+
 -- One rebuild after login or /reload. Later bag and money events stay on the planner.
 local function tryRebuildOpportunities()
   local Lots = OnyxiaGold.Lots
@@ -100,25 +141,12 @@ local function tryRebuildOpportunities()
     return false
   end
   opportunitiesRebuilt = true
-  if OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
-    OnyxiaGold.OpportunityEngine:Refresh()
-  end
+  scheduleRefresh("engine")
   return true
 end
 
 local function refreshPlannerSoon()
-  if OnyxiaGold.Scanner and OnyxiaGold.Scanner.IsScanning and OnyxiaGold.Scanner:IsScanning() then
-    if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.RefreshHeader then
-      OnyxiaGold.UI:RefreshHeader()
-    end
-    return
-  end
-  if OnyxiaGold.ActionPlanner and OnyxiaGold.ActionPlanner.Refresh then
-    OnyxiaGold.ActionPlanner:Refresh()
-  end
-  if OnyxiaGold.UI and OnyxiaGold.UI.frame and OnyxiaGold.UI.Refresh then
-    OnyxiaGold.UI:Refresh()
-  end
+  scheduleRefresh("planner")
 end
 
 function State:OnLogin()
@@ -287,11 +315,12 @@ eventFrame:SetScript("OnUpdate", function(self, elapsed)
       if OnyxiaGold.Capabilities then
         replaced = OnyxiaGold.Capabilities:ScanOpenTradeSkill() and true or false
       end
-      if replaced and OnyxiaGold.OpportunityEngine and OnyxiaGold.OpportunityEngine.Refresh then
-        OnyxiaGold.OpportunityEngine:Refresh()
+      if replaced then
+        scheduleRefresh("engine")
       else
         refreshPlannerSoon()
       end
     end
   end
+  pumpRefresh()
 end)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.39 — Window freezes
+
+- Opening the auction house, an Auctionator page or buy, the mailbox, a letter, an attachment, a profession window, or /og no longer rebuilds the plan on that event. The window paints the plan already in memory. One refresh runs after the burst goes quiet, in short slices, so the client is not locked.
+- A Buy that was already clicked still rechecks that auction row. It does not rebuild the whole plan. Opening the auction house still does not start a browse. Buy and Post stay on the click.
+
 ## 0.1.38 — Realised sales
 
 - A completed sale records the item, the quantity, the proceeds, and the time it sold. The auction-house cut and the deposit returned are recorded when the mail states them. The time listed and whether it was relisted are recorded when those are known. A missing cut stays blank. It is not guessed at 5%.

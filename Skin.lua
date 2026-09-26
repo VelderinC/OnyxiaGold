@@ -112,9 +112,19 @@ local function applyRegion(tex, name, flipH, flipV)
   if not tex or not box then
     return false
   end
-  tex:SetTexture(media.texture)
+  local painted = tex:SetTexture(media.texture)
+  local got = tex.GetTexture and tex:GetTexture()
+  if not painted or not got or got == "" then
+    if tex.Hide then
+      tex:Hide()
+    end
+    return false
+  end
   local left, right, top, bottom = Skin.RegionCoords(box, media.width, media.height, flipH, flipV)
   tex:SetTexCoord(left, right, top, bottom)
+  if tex.SetAlpha then
+    tex:SetAlpha(1)
+  end
   return true
 end
 
@@ -124,15 +134,90 @@ local function setColor(fs, color)
   end
 end
 
-local function clearBackdrop(panel)
+-- ChatFrameBackground is a stock white tile. Vertex color makes it a flat dark fill
+-- that 3.3.5a draws even when the addon atlas does not decode.
+local SOLID_FILL = "Interface\\ChatFrame\\ChatFrameBackground"
+
+local MAIN_BACKDROP = {
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  tile = true,
+  tileSize = 32,
+  edgeSize = 16,
+  insets = { left = 4, right = 4, top = 4, bottom = 4 },
+}
+
+local PANEL_BACKDROP = {
+  bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  tile = true,
+  tileSize = 16,
+  edgeSize = 8,
+  insets = { left = 2, right = 2, top = 2, bottom = 2 },
+}
+
+local function fillOpaque(tex)
+  if not tex or not tex.SetTexture then
+    return false
+  end
+  tex:SetTexture(SOLID_FILL)
+  if tex.SetTexCoord then
+    tex:SetTexCoord(0, 1, 0, 1)
+  end
+  if tex.SetVertexColor then
+    tex:SetVertexColor(0.05, 0.045, 0.04, 1)
+  end
+  if tex.SetAlpha then
+    tex:SetAlpha(1)
+  end
+  if tex.Show then
+    tex:Show()
+  end
+  return true
+end
+
+local function ensureOpaqueBackdrop(panel)
   if not panel or not panel.SetBackdrop then
     return
   end
-  local ok = pcall(panel.SetBackdrop, panel, nil)
-  if not ok then
-    pcall(panel.SetBackdropColor, panel, 0, 0, 0, 0)
-    pcall(panel.SetBackdropBorderColor, panel, 0, 0, 0, 0)
+  local name = panel.GetName and panel:GetName()
+  if name == "OnyxiaGoldFrame" then
+    panel:SetBackdrop(MAIN_BACKDROP)
+    panel:SetBackdropColor(0.32, 0.27, 0.20, 1)
+    panel:SetBackdropBorderColor(0.86, 0.74, 0.42, 1)
+    return
   end
+  panel:SetBackdrop(PANEL_BACKDROP)
+  if name == "OnyxiaGoldListSection" then
+    panel:SetBackdropColor(0.04, 0.035, 0.03, 1)
+    panel:SetBackdropBorderColor(0.78, 0.66, 0.32, 1)
+  else
+    panel:SetBackdropColor(0.06, 0.05, 0.04, 1)
+    panel:SetBackdropBorderColor(0.55, 0.46, 0.26, 1)
+  end
+end
+
+local atlasBind
+
+local function atlasFileBinds(host)
+  if atlasBind ~= nil then
+    return atlasBind
+  end
+  local media = atlas()
+  if not media or not host or not host.CreateTexture then
+    return false
+  end
+  local probe = host:CreateTexture(nil, "OVERLAY")
+  if not probe or not probe.SetTexture then
+    atlasBind = false
+    return false
+  end
+  probe:Hide()
+  local ok = probe:SetTexture(media.texture)
+  local got = probe.GetTexture and probe:GetTexture()
+  probe:SetTexture(nil)
+  atlasBind = ok and got and got ~= "" and true or false
+  return atlasBind
 end
 
 local function span(box, key, fallback)
@@ -147,18 +232,33 @@ local function buildChrome(panel)
   if not panel or panel.ogChrome then
     return
   end
-  if not hasRegions(FRAME_REGIONS) then
+  ensureOpaqueBackdrop(panel)
+  if not panel.CreateTexture then
+    panel.ogChrome = true
     return
   end
   local media = atlas()
-  local corner = span(media.regions.corner_tl, "width", 12)
-  local edgeY = span(media.regions.edge_top, "height", 6)
-  local edgeX = span(media.regions.edge_left, "width", 6)
+  local corner = 12
+  local edgeY = 6
+  local edgeX = 6
+  if media and hasRegions(FRAME_REGIONS) then
+    corner = span(media.regions.corner_tl, "width", 12)
+    edgeY = span(media.regions.edge_top, "height", 6)
+    edgeX = span(media.regions.edge_left, "width", 6)
+  end
 
   local bg = panel:CreateTexture(nil, "BACKGROUND")
   bg:SetPoint("TOPLEFT", panel, "TOPLEFT", edgeX, -edgeY)
   bg:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -edgeX, edgeY)
-  applyRegion(bg, "background_dark_tile")
+  -- The atlas tile is not the window back. OnyxiaGoldUI_256x128.tga does not
+  -- decode on 3.3.5a, and clearing the backdrop left this quad see-through.
+  fillOpaque(bg)
+
+  if not hasRegions(FRAME_REGIONS) or not atlasFileBinds(panel) then
+    ensureOpaqueBackdrop(panel)
+    panel.ogChrome = true
+    return
+  end
 
   local tl = panel:CreateTexture(nil, "BORDER")
   tl:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
@@ -208,7 +308,7 @@ local function buildChrome(panel)
   right:SetWidth(edgeX)
   applyRegion(right, "edge_left", true, false)
 
-  clearBackdrop(panel)
+  ensureOpaqueBackdrop(panel)
   panel.ogChrome = true
 end
 
@@ -242,6 +342,9 @@ local function skinButton(button, kind)
     needed[i] = "button_" .. kind .. "_" .. BUTTON_STATES[i].suffix
   end
   if not hasRegions(needed) then
+    return
+  end
+  if not atlasFileBinds(button) then
     return
   end
   local media = atlas()
@@ -348,11 +451,6 @@ function Skin:Apply(ui)
     return
   end
   ui.ogSkinApplied = true
-  if not atlas() then
-    return
-  end
-  ui.ogSkinLive = true
-
   if ui.frame then
     buildChrome(ui.frame)
   end
@@ -361,6 +459,10 @@ function Skin:Apply(ui)
       buildChrome(getglobal(PANELS[i]))
     end
   end
+  if not atlas() then
+    return
+  end
+  ui.ogSkinLive = true
 
   skinNamed(SECONDARY_BUTTONS, "secondary")
   local rows = ui.rows
@@ -401,7 +503,7 @@ function Skin:Apply(ui)
   end
 
   local bar = ui.scanBar
-  if bar and not bar.ogFill and hasRegions({ "progress_track", "progress_fill_blue" }) then
+  if bar and not bar.ogFill and hasRegions({ "progress_track", "progress_fill_blue" }) and atlasFileBinds(bar) then
     local track = bar:CreateTexture(nil, "BACKGROUND")
     track:SetAllPoints(bar)
     applyRegion(track, "progress_track")
@@ -420,7 +522,7 @@ function Skin:Apply(ui)
     setColor(ui.scanBarText, { 0.85, 0.93, 1 })
   end
 
-  if ui.status and hasRegions({ "status_info", "status_success", "status_warning", "status_error" }) then
+  if ui.status and hasRegions({ "status_info", "status_success", "status_warning", "status_error" }) and atlasFileBinds(ui.frame) then
     local parent = ui.status:GetParent()
     if parent then
       local icon = parent:CreateTexture(nil, "ARTWORK")
@@ -439,7 +541,7 @@ function Skin:Apply(ui)
     end
   end
 
-  if ui.factoryLabel and hasRegions({ "status_success", "status_warning" }) then
+  if ui.factoryLabel and hasRegions({ "status_success", "status_warning" }) and atlasFileBinds(ui.frame) then
     local parent = ui.factoryLabel:GetParent()
     if parent then
       local icon = parent:CreateTexture(nil, "ARTWORK")

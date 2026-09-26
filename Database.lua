@@ -191,6 +191,8 @@ function DB:EmptyCharacter()
     -- Real buys and sales only. Scans and expected profit are not trades.
     trades = {},
     tradeMailSeen = {},
+    -- Open buys and listings that can still be tied to a later sale.
+    tradeOpen = {},
     stateTimestamps = {},
   }
 end
@@ -240,6 +242,9 @@ function DB:EnsureCharacterShape(rec)
   end
   if type(rec.tradeMailSeen) ~= "table" then
     rec.tradeMailSeen = {}
+  end
+  if type(rec.tradeOpen) ~= "table" then
+    rec.tradeOpen = {}
   end
   return rec
 end

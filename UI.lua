@@ -1699,6 +1699,14 @@ function UI:OnBuyClick(row)
   if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.RecordBuyClick then
     OnyxiaGold.TradeLog:RecordBuyClick(itemID, itemName, bid.count, bid.buyout, note)
   end
+  if action.flip and OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.RememberBought then
+    OnyxiaGold.TradeLog:RememberBought({
+      itemID = itemID,
+      name = itemName,
+      count = bid.count,
+      plan = action.planName,
+    })
+  end
   PlaceAuctionBid("list", bid.index, bid.buyout)
   if stop.NoteBidSent then
     stop:NoteBidSent()
@@ -1886,6 +1894,18 @@ function UI:OnPostClick(row)
   end
   ClickAuctionSellItemButton()
   StartAuction(bid, buyout, duration, postCount, 1)
+  if OnyxiaGold.TradeLog and OnyxiaGold.TradeLog.RememberListed then
+    local listedName = itemID and OnyxiaGold.Data and OnyxiaGold.Data.GetItemName and OnyxiaGold.Data.GetItemName(itemID)
+    if type(listedName) ~= "string" or listedName == "" then
+      listedName = action.sortName
+    end
+    OnyxiaGold.TradeLog:RememberListed({
+      itemID = itemID,
+      name = listedName,
+      count = postCount,
+      plan = action.planName,
+    })
+  end
   if OnyxiaGold.Log and OnyxiaGold.Log.Debug then
     OnyxiaGold.Log:Debug("UI", string.format(
       "StartAuction item=%d count=%d bid=%d buyout=%d duration=%d",

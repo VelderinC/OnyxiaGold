@@ -1333,6 +1333,106 @@ function Tests:Run()
     and not string.find(cooldownNames, "Gem", 1, true)
     and Session:CooldownUsed("transmute_20h"))
 
+  local TradeLog = OnyxiaGold.TradeLog
+  local recorded = 200000
+  local guessedCut = math.floor(recorded * (10000 - 500) / 10000)
+  local priced = TradeLog.SaleFieldsFromInvoice(recorded, nil, nil, nil)
+  local bare = {
+    side = "sale",
+    name = "Titanium Bar",
+    itemID = 41163,
+    count = 1,
+    copper = priced.copper,
+    when = "2026-09-26 00:31",
+  }
+  local realised = TradeLog.RealisedProceeds(bare)
+  local bareLine = TradeLog.FormatLine(bare)
+  check("a sale with no recorded cut does not get a guessed 5% subtracted again",
+    priced.cut == nil
+    and bare.cut == nil
+    and bare.deposit == nil
+    and bare.listed == nil
+    and bare.relisted == nil
+    and realised == recorded
+    and realised ~= guessedCut
+    and string.find(bareLine, "20g", 1, true) ~= nil
+    and not string.find(bareLine, "19g", 1, true)
+    and not string.find(bareLine, "Auction-house cut", 1, true))
+
+  local stated = TradeLog.SaleFieldsFromInvoice(190000, 200000, 3000, 10000)
+  local statedProceeds = TradeLog.RealisedProceeds({
+    side = "sale",
+    copper = stated.copper,
+    cut = stated.cut,
+  })
+  check("a recorded cut stays beside the proceeds",
+    stated.copper == 190000
+    and stated.cut == 10000
+    and stated.deposit == 3000
+    and statedProceeds == 190000
+    and statedProceeds ~= math.floor(190000 * (10000 - 500) / 10000))
+
+  local open = {
+    {
+      kind = "list",
+      name = "Titanium Bar",
+      itemID = 41163,
+      plan = "Saronite to Titanium",
+      listed = 100,
+      listedWhen = "2026-09-25 12:00",
+    },
+  }
+  local linked = {
+    side = "sale",
+    name = "Titanium Bar",
+    itemID = 41163,
+    count = 5,
+    copper = recorded,
+    when = "2026-09-26 00:31",
+  }
+  TradeLog.AttachKnown(linked, open)
+  local exported = TradeLog.FormatLine(linked)
+  check("a sale linked to a plan names that plan in the export",
+    linked.plan == "Saronite to Titanium"
+    and linked.cut == nil
+    and linked.relisted == nil
+    and string.find(exported, "Plan: Saronite to Titanium", 1, true) ~= nil
+    and string.find(exported, "Listed 2026-09-25 12:00", 1, true) ~= nil
+    and string.find(exported, "Sold 2026-09-26 00:31", 1, true) ~= nil
+    and string.find(exported, "5x Titanium Bar", 1, true) ~= nil
+    and string.find(exported, "20g", 1, true) ~= nil
+    and not string.find(exported, "Relisted", 1, true)
+    and not string.find(exported, "Auction-house cut", 1, true))
+
+  local history = {
+    { kind = "list", name = "Titanium Bar", itemID = 41163, plan = "Saronite to Titanium", expired = true },
+  }
+  local again = TradeLog.PushListing(history, {
+    itemID = 41163,
+    name = "Titanium Bar",
+    count = 5,
+    listed = 200,
+    listedWhen = "2026-09-26 01:00",
+  })
+  local resale = {
+    side = "sale",
+    name = "Titanium Bar",
+    itemID = 41163,
+    count = 5,
+    copper = recorded,
+    when = "2026-09-26 02:00",
+  }
+  TradeLog.AttachKnown(resale, history)
+  local resaleLine = TradeLog.FormatLine(resale)
+  check("a relisted sale names the plan and says it was relisted",
+    again
+    and again.relisted == true
+    and again.plan == "Saronite to Titanium"
+    and resale.relisted == true
+    and resale.plan == "Saronite to Titanium"
+    and string.find(resaleLine, "Plan: Saronite to Titanium", 1, true) ~= nil
+    and string.find(resaleLine, "Relisted", 1, true) ~= nil)
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

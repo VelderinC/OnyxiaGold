@@ -1047,6 +1047,292 @@ function Tests:Run()
     and personalSteps[1].role == "buy"
     and not personalMail)
 
+  -- Recipe A makes the reagent for recipe B. Keeping that reagent beats
+  -- selling it and buying it again, so the plan crafts A, then B, and does
+  -- not spend the sale of A. The vial listing stays on the book.
+  local function chainCandidates(vialNet, crafts)
+    return {
+      {
+        known = true,
+        name = "Vial",
+        output = "Vial",
+        outputItemID = 102,
+        outputCount = 1,
+        net = vialNet,
+        profit = vialNet - 10000,
+        crafts = crafts or 1,
+        profession = "Alchemy",
+        reagents = { { itemID = 101, count = 1, name = "Herb" } },
+      },
+      {
+        known = true,
+        name = "Flask",
+        output = "Flask",
+        outputItemID = 103,
+        outputCount = 1,
+        net = 100000,
+        profit = 50000,
+        crafts = crafts or 1,
+        profession = "Alchemy",
+        reagents = { { itemID = 102, count = 1, name = "Vial" } },
+      },
+    }
+  end
+  local function chainDepth(vialPrice, herbLevels, herbCovered)
+    return {
+      [101] = {
+        levels = herbLevels or { { p = 10000, q = 1, n = 1, s = 1 } },
+        covered = herbCovered or 1,
+      },
+      [102] = { levels = { { p = vialPrice, q = 1, n = 1, s = 1 } }, covered = 1 },
+    }
+  end
+  local keptPath = Plan.Portfolio(chainCandidates(20000, 1), {
+    cash = 1000000,
+    auctionOpen = false,
+    professionOpen = false,
+    depth = chainDepth(50000),
+  })
+  local keptSteps = keptPath and keptPath.steps or {}
+  local keptRoles = {}
+  local keptNames = {}
+  local keptVialBuy = false
+  local keptVialPost = false
+  local keptProceeds = 0
+  for i = 1, nitems(keptSteps) do
+    local step = keptSteps[i]
+    table.insert(keptRoles, step.role or "")
+    table.insert(keptNames, step.name or "")
+    keptProceeds = keptProceeds + (tonumber(step.proceeds) or 0)
+    if step.role == "buy" and step.itemID == 102 then
+      keptVialBuy = true
+    end
+    if step.role == "post" and step.name == "Vial" then
+      keptVialPost = true
+    end
+  end
+  local keptLine = keptPath and keptPath.nextLine or ""
+  check("a two-step path crafts A then B and does not spend the sale of A",
+    keptPath
+    and nitems(keptPath.paths) == 1
+    and keptPath.paths[1].first == "Vial"
+    and keptPath.paths[1].second == "Flask"
+    and nitems(keptPath.crafts) == 0
+    and keptPath.profit == 90000
+    and keptPath.spent == 10000
+    and keptPath.purse == 990000
+    and table.concat(keptRoles, ",") == "buy,craft,craft,post"
+    and table.concat(keptNames, ",") == "Herb,Vial,Flask,Flask"
+    and keptSteps[1].count == 1
+    and keptSteps[1].cash == 10000
+    and not keptSteps[2].proceeds
+    and keptSteps[3].proceeds == 100000
+    and keptProceeds == 200000
+    and not keptVialBuy
+    and not keptVialPost
+    and Session:GetBagCount(102) == 0
+    and Session:CoveredQuantity(102) == 1
+    and string.find(keptLine, "Open the Auction House. Buy 1 Herb. Maximum spend 1g. Expected session profit +9g.", 1, true)
+    and string.find(keptSteps[2].line or "", "Open Alchemy. Craft 1 Vial.", 1, true)
+    and not string.find(keptLine, "Craft", 1, true)
+    and not string.find(keptLine, "Vial", 1, true))
+
+  local tightCandidates = chainCandidates(20000, 1)
+  table.insert(tightCandidates, {
+    name = "Extra",
+    output = "Extra",
+    profit = 40000,
+    net = 50000,
+    crafts = 1,
+    reagents = { { itemID = 104, count = 1, name = "Extra Reagent" } },
+  })
+  local tightDepth = chainDepth(50000)
+  tightDepth[104] = { levels = { { p = 10000, q = 1, n = 1, s = 1 } }, covered = 1 }
+  local tightPath = Plan.Portfolio(tightCandidates, {
+    cash = 10000,
+    depth = tightDepth,
+  })
+  local tightNames = ""
+  local tightSteps = tightPath and tightPath.steps or {}
+  for i = 1, nitems(tightSteps) do
+    tightNames = tightNames .. " " .. (tightSteps[i].name or "")
+  end
+  check("the would-be sale of the intermediate is not cash for a later buy",
+    tightPath
+    and nitems(tightPath.paths) == 1
+    and tightPath.spent == 10000
+    and tightPath.purse == 0
+    and Session:RemainingCash() == 0
+    and not string.find(tightNames, "Extra", 1, true)
+    and string.find(tightNames, "Vial", 1, true)
+    and string.find(tightNames, "Flask", 1, true))
+
+  local soldPath = Plan.Portfolio(chainCandidates(200000, 1), {
+    cash = 1000000,
+    depth = chainDepth(20000),
+  })
+  local soldSteps = soldPath and soldPath.steps or {}
+  local soldRoles = {}
+  local soldNames = {}
+  local soldVialBuy = false
+  local soldVialPost = false
+  for i = 1, nitems(soldSteps) do
+    local step = soldSteps[i]
+    table.insert(soldRoles, step.role or "")
+    table.insert(soldNames, step.name or "")
+    if step.role == "buy" and step.itemID == 102 then
+      soldVialBuy = true
+    end
+    if step.role == "post" and step.name == "Vial" then
+      soldVialPost = true
+    end
+  end
+  check("selling A and buying B's reagent is kept when that is the better gold",
+    soldPath
+    and nitems(soldPath.paths) == 0
+    and nitems(soldPath.crafts) == 2
+    and soldPath.profit == 270000
+    and soldPath.spent == 30000
+    and soldPath.purse == 970000
+    and soldVialBuy
+    and soldVialPost
+    and table.concat(soldRoles, ",") == "buy,craft,post,buy,craft,post"
+    and soldNames[2] == "Vial"
+    and soldNames[3] == "Vial"
+    and soldNames[5] == "Flask")
+
+  local reservedCandidates = chainCandidates(20000, 1)
+  table.insert(reservedCandidates, {
+    name = "Rival",
+    output = "Rival",
+    profit = 500000,
+    net = 510000,
+    crafts = 1,
+    profession = "Alchemy",
+    reagents = { { itemID = 101, count = 1, name = "Herb" } },
+  })
+  local reservedPath = Plan.Portfolio(reservedCandidates, {
+    cash = 1000000,
+    depth = chainDepth(50000),
+  })
+  local reservedHerbBuys = 0
+  local reservedVialCraft = false
+  local reservedVialBuy = false
+  local reservedSteps = reservedPath and reservedPath.steps or {}
+  for i = 1, nitems(reservedSteps) do
+    local step = reservedSteps[i]
+    if step.role == "buy" and step.itemID == 101 then
+      reservedHerbBuys = reservedHerbBuys + 1
+    end
+    if step.role == "craft" and step.name == "Vial" then
+      reservedVialCraft = true
+    end
+    if step.role == "buy" and step.itemID == 102 then
+      reservedVialBuy = true
+    end
+  end
+  check("a path does not buy a listing another craft already reserved",
+    reservedPath
+    and nitems(reservedPath.paths) == 0
+    and reservedHerbBuys == 1
+    and not reservedVialCraft
+    and reservedVialBuy
+    and reservedPath.crafts[1].name == "Rival")
+
+  local ownedPath = Plan.Portfolio(chainCandidates(20000, 1), {
+    cash = 1000000,
+    bags = { [101] = 1 },
+    basis = { [101] = 10000 },
+    auctionOpen = false,
+    professionOpen = false,
+    depth = chainDepth(50000),
+  })
+  local ownedLine = ownedPath and ownedPath.nextLine or ""
+  local ownedSteps = ownedPath and ownedPath.steps or {}
+  check("the top line names the next craft when the profession window is closed",
+    ownedPath
+    and nitems(ownedPath.paths) == 1
+    and ownedPath.spent == 0
+    and ownedPath.purse == 1000000
+    and ownedPath.profit == 90000
+    and ownedSteps[1].role == "craft"
+    and ownedSteps[1].name == "Vial"
+    and string.find(ownedLine, "Open Alchemy. Craft 1 Vial. 1 to craft. Expected session profit +9g.", 1, true) == 1
+    and not string.find(ownedLine, "Open the Auction House", 1, true)
+    and not string.find(ownedLine, "Buy", 1, true))
+
+  local bankPath = Plan.Portfolio(chainCandidates(20000, 1), {
+    cash = 1000000,
+    bank = { [101] = 1 },
+    auctionOpen = false,
+    professionOpen = false,
+    depth = chainDepth(50000),
+  })
+  local bankPathLine = bankPath and bankPath.nextLine or ""
+  local bankPathSteps = bankPath and bankPath.steps or {}
+  check("a bank reagent on a path is withdrawn before either craft",
+    bankPath
+    and nitems(bankPath.paths) == 1
+    and bankPath.spent == 0
+    and bankPath.profit == 100000
+    and bankPathSteps[1].role == "withdraw"
+    and bankPathSteps[1].name == "Herb"
+    and bankPathSteps[2].role == "craft"
+    and bankPathSteps[2].name == "Vial"
+    and bankPathSteps[3].role == "craft"
+    and string.find(bankPathLine, "Withdraw Herb. Expected session profit +10g.", 1, true) == 1
+    and not string.find(bankPathLine, "Open the Auction House", 1, true)
+    and string.find(bankPathSteps[2].line or "", "Open Alchemy. Craft 1 Vial.", 1, true)
+    and Session:GetBankCount(101) == 0
+    and Session:CoveredQuantity(102) == 1)
+
+  local marginalCandidates = chainCandidates(20000, 2)
+  local marginalPath = Plan.Portfolio(marginalCandidates, {
+    cash = 1000000,
+    depth = chainDepth(50000, {
+      { p = 10000, q = 1, n = 1, s = 1 },
+      { p = 500000, q = 1, n = 1, s = 1 },
+    }, 2),
+  })
+  check("both crafts stay only while the next marginal profit is positive",
+    marginalPath
+    and nitems(marginalPath.paths) == 1
+    and marginalPath.paths[1].firstCrafts == 1
+    and marginalPath.paths[1].secondCrafts == 1
+    and marginalPath.spent == 10000
+    and marginalPath.profit == 90000
+    and marginalPath.steps[2].count == 1
+    and marginalPath.steps[3].count == 1)
+
+  local cooldownCandidates = chainCandidates(20000, 1)
+  cooldownCandidates[1].cooldown = "transmute_20h"
+  table.insert(cooldownCandidates, {
+    name = "Gem",
+    output = "Gem",
+    profit = 1000,
+    net = 2000,
+    crafts = 1,
+    cooldown = "transmute_20h",
+    profession = "Alchemy",
+    reagents = { { itemID = 31, count = 1, name = "Green" } },
+  })
+  local cooldownDepth = chainDepth(50000)
+  cooldownDepth[31] = { levels = { { p = 1000, q = 1, n = 1, s = 1 } }, covered = 1 }
+  local cooldownPath = Plan.Portfolio(cooldownCandidates, {
+    cash = 1000000,
+    depth = cooldownDepth,
+  })
+  local cooldownNames = ""
+  local cooldownSteps = cooldownPath and cooldownPath.steps or {}
+  for i = 1, nitems(cooldownSteps) do
+    cooldownNames = cooldownNames .. " " .. (cooldownSteps[i].name or "")
+  end
+  check("a path uses the 20-hour cooldown once and does not share it",
+    cooldownPath
+    and nitems(cooldownPath.paths) == 1
+    and not string.find(cooldownNames, "Gem", 1, true)
+    and Session:CooldownUsed("transmute_20h"))
+
   local passed = nitems(lines) - failed
   local head
   if failed == 0 then

@@ -1758,6 +1758,29 @@ end
 local claimedTools = {}
 
 local function groupFor(action, index)
+  if type(action.pathSteps) == "table" then
+    local steps = {}
+    local buys = {}
+    for i = 1, table.getn(action.pathSteps) do
+      local step = action.pathSteps[i]
+      if step.role ~= "post" or fillSessionPost(action, step) then
+        step.source = action
+        table.insert(steps, step)
+        if step.role == "buy" and step.itemID then
+          buys[step.itemID] = true
+        end
+      end
+    end
+    return {
+      index = index,
+      priority = 0,
+      profit = tonumber(action.expectedProfit) or 0,
+      proceeds = tonumber(action.pathProceeds) or 0,
+      steps = steps,
+      buys = buys,
+      uses = action.pathUses or {},
+    }
+  end
   local names = namesFor(action)
   local steps = {}
   if OnyxiaGold.SessionPlan and OnyxiaGold.SessionPlan.StepsFromAction then
@@ -2134,6 +2157,127 @@ function Planner:Refresh()
 
   local remaining = deployable
   local used = {}
+  local committedSpells = {}
+  local failedPaths = {}
+  local function spellOfOpp(opp)
+    local req = opp and opp.requirements
+    local spell = req and tonumber(req.recipeSpellID)
+    if spell then
+      return spell
+    end
+    local id = opp and opp.recipeId
+    if type(id) == "string" then
+      return tonumber(string.match(id, "^known:(%d+)"))
+    end
+    return nil
+  end
+  local function rememberSpell(opp)
+    local spell = spellOfOpp(opp)
+    if spell then
+      committedSpells[spell] = true
+    end
+  end
+  local function spellInside(opp, priced)
+    local spell = spellOfOpp(opp)
+    if not spell or type(priced) ~= "table" then
+      return false
+    end
+    local first = priced.first and tonumber(priced.first.spellID)
+    local second = priced.second and tonumber(priced.second.spellID)
+    return spell == first or spell == second
+  end
+  local function pathScore(priced)
+    local profit = priced and tonumber(priced.profit) or 0
+    local cash = priced and tonumber(priced.cash) or 0
+    local liquid = OnyxiaGold.Capital and OnyxiaGold.Capital:GetLiquid() or 0
+    if OnyxiaGold.Lots and OnyxiaGold.Lots.ActionScore then
+      return OnyxiaGold.Lots.ActionScore(profit, 1, cash, liquid)
+    end
+    return profit
+  end
+  local function bestKnownPath()
+    local Plan = OnyxiaGold.SessionPlan
+    if not Plan or not Plan.KnownCandidates or not Plan.BestPath then
+      return nil
+    end
+    local candidates = Plan.KnownCandidates()
+    local open = {}
+    for i = 1, table.getn(candidates) do
+      local row = candidates[i]
+      if row and not committedSpells[row.spellID] then
+        table.insert(open, row)
+      end
+    end
+    if table.getn(open) < 2 then
+      return nil
+    end
+    return Plan.BestPath(open, function(first, second)
+      local key = tostring(first and first.spellID) .. ":" .. tostring(second and second.spellID)
+      return failedPaths[key] and true or false
+    end)
+  end
+  local function takePath(priced)
+    local Plan = OnyxiaGold.SessionPlan
+    if not Plan or not Plan.AcceptPath or type(priced) ~= "table" then
+      return false
+    end
+    local crafted = Plan.AcceptPath(priced)
+    if not crafted or table.getn(crafted) < 1 then
+      return false
+    end
+    local first = priced.first or {}
+    local second = priced.second or {}
+    if first.spellID then
+      committedSpells[first.spellID] = true
+    end
+    if second.spellID then
+      committedSpells[second.spellID] = true
+    end
+    for i = 1, table.getn(opps) do
+      if spellInside(opps[i], priced) then
+        used[i] = true
+      end
+    end
+    local per = tonumber(second.outputCount) or 1
+    if per < 1 then
+      per = 1
+    end
+    local postUnits = (tonumber(priced.secondCrafts) or 0) * per
+    local uses = {}
+    local lines = priced.lines or {}
+    for i = 1, table.getn(lines) do
+      local line = lines[i]
+      if line and (tonumber(line.ownedUnits) or 0) > 0 and line.itemID then
+        uses[line.itemID] = true
+      end
+    end
+    table.insert(self.actions, {
+      kind = "BUY_AND_CRAFT",
+      name = second.output or second.name or "Craft",
+      typeLabel = second.profession or "Craft",
+      expectedProfit = priced.profit,
+      cashRequiredNow = priced.cash or 0,
+      crafts = tonumber(priced.secondCrafts) or 1,
+      state = "ACTIONABLE_NOW",
+      detail = "Craft " .. tostring(first.output or first.name or "the reagent")
+        .. ", then " .. tostring(second.output or second.name or "the output") .. ".",
+      confidence = 1,
+      path = true,
+      pathSteps = crafted,
+      pathProceeds = tonumber(priced.proceeds) or 0,
+      pathUses = uses,
+      breakdown = {
+        outputItemID = tonumber(second.outputItemID),
+        postUnits = postUnits,
+        saleUnit = tonumber(priced.saleUnit),
+        proceeds = tonumber(priced.proceeds) or 0,
+      },
+    })
+    if OnyxiaGold.SessionState and OnyxiaGold.SessionState.IsActive and OnyxiaGold.SessionState:IsActive() then
+      remaining = OnyxiaGold.SessionState:RemainingCash()
+    end
+    return true
+  end
   local people = {}
   for i = 1, table.getn(opps) do
     people[i] = self:Personalize(opps[i], deployable, afterMailBudget(deployable))
@@ -2181,21 +2325,46 @@ function Planner:Refresh()
         end
       end
     end
-    if not bestI then
-      break
-    end
-    used[bestI] = true
-    local person = people[bestI]
-    if self:ReserveSelected(person) then
-      if OnyxiaGold.SessionState and OnyxiaGold.SessionState:IsActive() then
-        remaining = OnyxiaGold.SessionState:RemainingCash()
+    local pathPick = bestKnownPath()
+    local pathBeats = false
+    if pathPick and bestPri < 1 then
+      if not bestI then
+        pathBeats = true
       else
-        remaining = remaining - (person.cashRequiredNow or 0)
-        if remaining < 0 then
-          remaining = 0
+        local inside = spellInside(opps[bestI], pathPick)
+        if inside or pathScore(pathPick) > bestScore then
+          pathBeats = true
         end
       end
-      table.insert(self.actions, actionFromPerson(person, table.getn(self.actions) + 1))
+    end
+    if pathBeats then
+      if not takePath(pathPick) then
+        local first = pathPick.first
+        local second = pathPick.second
+        local key = tostring(first and first.spellID) .. ":" .. tostring(second and second.spellID)
+        failedPaths[key] = true
+        pathBeats = false
+      end
+    end
+    if pathBeats then
+      -- The path reserved its lots. The two recipes are not also sold and bought.
+    elseif not bestI then
+      break
+    else
+      used[bestI] = true
+      rememberSpell(opps[bestI])
+      local person = people[bestI]
+      if self:ReserveSelected(person) then
+        if OnyxiaGold.SessionState and OnyxiaGold.SessionState:IsActive() then
+          remaining = OnyxiaGold.SessionState:RemainingCash()
+        else
+          remaining = remaining - (person.cashRequiredNow or 0)
+          if remaining < 0 then
+            remaining = 0
+          end
+        end
+        table.insert(self.actions, actionFromPerson(person, table.getn(self.actions) + 1))
+      end
     end
   end
 

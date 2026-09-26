@@ -11,8 +11,14 @@ local State = OnyxiaGold.CharacterState
 
 local BAG_THROTTLE = 0.25
 local TRADE_THROTTLE = 0.35
+local MAIL_THROTTLE = 0.25
+local OWNED_THROTTLE = 0.25
 local bagDirty = false
 local bagElapsed = 0
+local mailDirty = false
+local mailElapsed = 0
+local ownedDirty = false
+local ownedElapsed = 0
 local tradeDirty = false
 local tradeElapsed = 0
 
@@ -161,20 +167,35 @@ local function refreshWindow(reason)
   scheduleRefresh("ui", reason)
 end
 
-local function noteOwnedChange(reason)
-  local owned = OnyxiaGold.OwnedAuctions
-  if not owned or not owned.Scan then
-    refreshWindow(reason)
+local function setBusy(name, on)
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.SetInteraction then
+    clock:SetInteraction(name, on)
+  end
+end
+
+local function pushCharacter(reason, changed)
+  local clock = OnyxiaGold.RefreshSchedule
+  if clock and clock.PushCharacter then
+    clock:PushCharacter(nowSeconds(), reason, changed and true or false)
     return
   end
-  local before = owned.Fingerprint and owned:Fingerprint() or ""
-  owned:Scan()
-  local after = owned.Fingerprint and owned:Fingerprint() or before
-  if before ~= after then
+  if changed then
     refreshPlannerSoon(reason)
-  else
-    refreshWindow(reason)
   end
+end
+
+function State:MarkBagsDirty()
+  bagDirty = true
+  bagElapsed = 0
+  setBusy("bags", true)
+end
+
+local function noteOwnedLater(reason)
+  ownedDirty = true
+  ownedElapsed = 0
+  setBusy("owned", true)
+  State.ownedReason = reason
 end
 
 function State:OnLogin()
@@ -224,18 +245,19 @@ function State:OnEvent(event, arg1)
     self:RefreshIdentity()
     refreshPlannerSoon("level")
   elseif event == "PLAYER_MONEY" then
-    if OnyxiaGold.Capital then
-      OnyxiaGold.Capital:RefreshLiquid()
+    local changed = false
+    if OnyxiaGold.Capital and OnyxiaGold.Capital.RefreshLiquid then
+      local _, liquidChanged = OnyxiaGold.Capital:RefreshLiquid()
+      changed = liquidChanged and true or false
     end
-    refreshPlannerSoon("money")
+    pushCharacter("money", changed)
   elseif event == "BAG_UPDATE" then
-    bagDirty = true
-    bagElapsed = 0
+    self:MarkBagsDirty()
   elseif event == "SKILL_LINES_CHANGED" then
     if OnyxiaGold.Capabilities then
       OnyxiaGold.Capabilities:ScanProfessions()
     end
-    refreshPlannerSoon("skill")
+    pushCharacter("skill", true)
   elseif event == "TRADE_SKILL_SHOW" then
     tradeDirty = true
     tradeElapsed = 0
@@ -255,30 +277,35 @@ function State:OnEvent(event, arg1)
     if OnyxiaGold.Mail then
       OnyxiaGold.Mail:OnMailboxOpened()
     end
+    mailDirty = true
+    mailElapsed = 0
+    setBusy("mail", true)
   elseif event == "MAIL_INBOX_UPDATE" then
-    if OnyxiaGold.Mail then
-      OnyxiaGold.Mail:ScanInbox()
-    end
-    refreshPlannerSoon("mail")
+    mailDirty = true
+    mailElapsed = 0
+    setBusy("mail", true)
   elseif event == "MAIL_CLOSED" then
     if OnyxiaGold.Mail then
       OnyxiaGold.Mail:OnMailboxClosed()
     end
     refreshWindow("mail-closed")
   elseif event == "AUCTION_HOUSE_SHOW" then
-    noteOwnedChange("ah-show")
+    refreshWindow("ah-show")
+    noteOwnedLater("ah-show")
   elseif event == "AUCTION_OWNED_LIST_UPDATE" then
-    noteOwnedChange("owned")
+    noteOwnedLater("owned")
   elseif event == "AUCTION_HOUSE_CLOSED" then
     if OnyxiaGold.OwnedAuctions then
       OnyxiaGold.OwnedAuctions:OnClosed()
     end
     refreshWindow("ah-closed")
   elseif event == "BANKFRAME_OPENED" then
-    if OnyxiaGold.Inventory then
-      OnyxiaGold.Inventory:ScanBank()
+    local changed = false
+    if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBank then
+      local _, bankChanged = OnyxiaGold.Inventory:ScanBank()
+      changed = bankChanged and true or false
     end
-    refreshPlannerSoon("bank")
+    pushCharacter("bank", changed)
   elseif event == "BANKFRAME_CLOSED" then
     -- last bank snapshot already persisted on open/scan
   end
@@ -319,13 +346,63 @@ eventFrame:SetScript("OnUpdate", function(self, elapsed)
     if bagElapsed >= BAG_THROTTLE then
       bagDirty = false
       bagElapsed = 0
-      if OnyxiaGold.Inventory then
-        OnyxiaGold.Inventory:ScanBags()
-        if BankFrame and BankFrame:IsShown() then
-          OnyxiaGold.Inventory:ScanBank()
+      local changed = false
+      if OnyxiaGold.Inventory and OnyxiaGold.Inventory.ScanBags then
+        local _, bagChanged = OnyxiaGold.Inventory:ScanBags()
+        changed = bagChanged and true or false
+        if BankFrame and BankFrame:IsShown() and OnyxiaGold.Inventory.ScanBank then
+          local _, bankChanged = OnyxiaGold.Inventory:ScanBank()
+          if bankChanged then
+            changed = true
+          end
         end
       end
-      refreshPlannerSoon("bags")
+      setBusy("bags", false)
+      pushCharacter("bags", changed)
+    end
+  end
+  if mailDirty then
+    mailElapsed = mailElapsed + elapsed
+    if mailElapsed >= MAIL_THROTTLE then
+      mailDirty = false
+      mailElapsed = 0
+      local changed = false
+      local mail = OnyxiaGold.Mail
+      if mail and mail.ScanInbox then
+        local before = mail.Fingerprint and mail:Fingerprint() or ""
+        mail:ScanInbox()
+        local after = mail.Fingerprint and mail:Fingerprint() or before
+        changed = before ~= after
+      end
+      setBusy("mail", false)
+      if changed then
+        pushCharacter("mail", true)
+      else
+        refreshWindow("mail")
+      end
+    end
+  end
+  if ownedDirty then
+    ownedElapsed = ownedElapsed + elapsed
+    if ownedElapsed >= OWNED_THROTTLE then
+      ownedDirty = false
+      ownedElapsed = 0
+      local reason = State.ownedReason or "owned"
+      State.ownedReason = nil
+      local owned = OnyxiaGold.OwnedAuctions
+      local changed = false
+      if owned and owned.Scan then
+        local before = owned.Fingerprint and owned:Fingerprint() or ""
+        owned:Scan()
+        local after = owned.Fingerprint and owned:Fingerprint() or before
+        changed = before ~= after
+      end
+      setBusy("owned", false)
+      if changed then
+        pushCharacter(reason, true)
+      else
+        refreshWindow(reason)
+      end
     end
   end
   if tradeDirty then

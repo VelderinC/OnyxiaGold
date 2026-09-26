@@ -16,6 +16,57 @@ local function rec()
   return OnyxiaGold.Database:GetCharacter()
 end
 
+local stackCache = {}
+
+local function maxStackOf(itemID)
+  local known = stackCache[itemID]
+  if known then
+    return known
+  end
+  if type(GetItemInfo) ~= "function" then
+    return nil
+  end
+  local _, _, _, _, _, _, _, maxStack = GetItemInfo(itemID)
+  maxStack = tonumber(maxStack)
+  if maxStack and maxStack > 0 then
+    stackCache[itemID] = maxStack
+    return maxStack
+  end
+  return nil
+end
+
+local function mapsEqual(a, b)
+  if a == b then
+    return true
+  end
+  if type(a) ~= "table" or type(b) ~= "table" then
+    return false
+  end
+  for key, value in pairs(a) do
+    if b[key] ~= value then
+      return false
+    end
+  end
+  for key, value in pairs(b) do
+    if a[key] ~= value then
+      return false
+    end
+  end
+  return true
+end
+
+-- Counts, free general slots, partial room, and stack size. Slot order is not economics.
+function Inventory.SameEconomics(left, right)
+  left = left or {}
+  right = right or {}
+  if left.freeSlots ~= right.freeSlots then
+    return false
+  end
+  return mapsEqual(left.bags, right.bags)
+    and mapsEqual(left.partialRoom, right.partialRoom)
+    and mapsEqual(left.stackSize, right.stackSize)
+end
+
 local function addCount(map, itemID, count)
   itemID = tonumber(itemID)
   count = tonumber(count) or 0
@@ -110,7 +161,7 @@ end
 function Inventory:ScanBags()
   local row = rec()
   if not row then
-    return {}
+    return {}, false
   end
   local bags = {}
   local partial = {}
@@ -140,9 +191,8 @@ function Inventory:ScanBags()
             count = 1
           end
           addCount(bags, itemID, count)
-          if general and type(GetItemInfo) == "function" then
-            local _, _, _, _, _, _, _, maxStack = GetItemInfo(itemID)
-            maxStack = tonumber(maxStack)
+          if general then
+            local maxStack = maxStackOf(itemID)
             if maxStack and maxStack > 0 then
               stacks[itemID] = maxStack
               if count < maxStack then
@@ -154,6 +204,21 @@ function Inventory:ScanBags()
       end
     end
   end
+  local before = {
+    bags = row.inventory.bags or {},
+    partialRoom = row.inventory.partialRoom or {},
+    stackSize = row.inventory.stackSize or {},
+    freeSlots = freeKnown and row.inventory.freeSlots or nil,
+  }
+  local after = {
+    bags = bags,
+    partialRoom = partial,
+    stackSize = stacks,
+    freeSlots = freeKnown and free or nil,
+  }
+  if Inventory.SameEconomics(before, after) then
+    return row.inventory.bags or bags, false
+  end
   row.inventory.bags = bags
   row.inventory.stackSize = stacks
   row.inventory.partialRoom = partial
@@ -162,7 +227,7 @@ function Inventory:ScanBags()
   end
   row.inventory.timestamp = time()
   row.stateTimestamps.bags = time()
-  return bags
+  return bags, true
 end
 
 function Inventory:ScanBank()
@@ -180,11 +245,15 @@ function Inventory:ScanBank()
   for bag = bagSlots + 1, bagSlots + bankBags do
     scanContainer(items, bag)
   end
+  local previous = row.bank.items or {}
+  if mapsEqual(previous, items) then
+    return previous, false
+  end
   row.bank.items = items
   row.bank.timestamp = time()
   row.stateTimestamps.bank = time()
   OnyxiaGold.Log:Debug("Inventory", "Bank snapshot stored")
-  return items
+  return items, true
 end
 
 function Inventory:GetBagCount(itemID)

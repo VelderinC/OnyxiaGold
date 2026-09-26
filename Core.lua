@@ -5,7 +5,7 @@
 ]]
 
 OnyxiaGold = OnyxiaGold or {}
-OnyxiaGold.Version = "0.1.42"
+OnyxiaGold.Version = "0.1.43"
 OnyxiaGold.DB_VERSION = 4
 
 OnyxiaGold.Data = OnyxiaGold.Data or {}
@@ -39,7 +39,7 @@ OnyxiaGold.Config = {
   -- Planner never deploys this fraction of liquid gold.
   CapitalReservePercent = 0.10,
   -- One OnyxiaGold slice should stay inside a 3.3.5 frame.
-  SliceBudgetMs = 2,
+  SliceBudgetMs = 0.85,
   SliceWarnMs = 4,
   -- A post at or above this asks for a live page before StartAuction.
   HighValuePostCopper = 500000,
@@ -340,13 +340,55 @@ function OnyxiaGold:HandleSlash(msg)
       end
     end
     self.UI:Show()
-  elseif msg == "perf" or msg == "perf reset" then
+  elseif msg == "pause" then
+    local clock = self.RefreshSchedule
+    if clock and clock.TogglePause then
+      local now = 0
+      if type(GetTime) == "function" then
+        now = tonumber(GetTime()) or 0
+      end
+      local paused = clock:TogglePause(now)
+      if paused then
+        self:Print("Economic planning paused.")
+      else
+        self:Print("Economic planning resumed.")
+      end
+    end
+  elseif msg == "perf" or string.sub(msg, 1, 5) == "perf " then
     local perf = self.Performance
-    if msg == "perf reset" then
+    local rest = ""
+    if string.sub(msg, 1, 5) == "perf " then
+      rest = string.sub(msg, 6)
+    end
+    if msg == "perf reset" or rest == "reset" then
       if perf and perf.Reset then
         perf:Reset()
       end
       self:Print("Performance counters cleared.", "Perf")
+    elseif string.sub(rest, 1, 8) == "isolate " or rest == "isolate" then
+      local which = "none"
+      if string.sub(rest, 1, 8) == "isolate " then
+        which = string.sub(rest, 9)
+      end
+      if which == "" or which == "none" then
+        self.PerfIsolate = nil
+        if self.BagQuality then
+          self.BagQuality.enabled = true
+        end
+      else
+        self.PerfIsolate = which
+        if self.BagQuality then
+          self.BagQuality.enabled = which ~= "bags"
+        end
+      end
+      self:Print("Performance isolate: " .. tostring(self.PerfIsolate or "none") .. ".", "Perf")
+    elseif string.sub(rest, 1, 5) == "mode " then
+      local mode = string.sub(rest, 6)
+      local clock = self.RefreshSchedule
+      if clock and clock.SetMode then
+        mode = clock:SetMode(mode)
+      end
+      self:Print("Performance mode: " .. tostring(mode) .. ".", "Perf")
     elseif perf and perf.Report then
       perf.showHud = true
       local text = perf:Report()
@@ -405,7 +447,7 @@ function OnyxiaGold:HandleSlash(msg)
       end
     end
   else
-    self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og perf, /og debug, /og log, /og reset, /og master")
+    self:Print("Commands: /og, /og scan, /og deep, /og full, /og test, /og opportunities, /og pause, /og perf, /og debug, /og log, /og reset, /og master")
   end
 end
 

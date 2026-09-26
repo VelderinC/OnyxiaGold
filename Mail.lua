@@ -25,8 +25,8 @@ function Mail:OnMailboxOpened()
   if row then
     row.mail.mailboxLastOpened = time()
   end
-  -- Inbox is populated by the client. Do not spam CheckInbox().
-  self:ScanInbox()
+  -- The inbox event is debounced. Do not scan on the open frame.
+  self.dirty = true
 end
 
 function Mail:OnMailboxClosed()
@@ -100,6 +100,19 @@ local function sellerInvoiceAmount(bid, deposit, consignment)
     amount = 0
   end
   return amount
+end
+
+local function purchaseClass(message)
+  if not message then
+    return false
+  end
+  if (tonumber(message.cod) or 0) > 0 then
+    return false
+  end
+  if message.safety ~= "SAFE_AUTO_PROCESS" then
+    return false
+  end
+  return message.class == "AH_PURCHASE_ITEM" or message.class == "AH_WON_ITEM"
 end
 
 function Mail:ScanInbox()
@@ -198,6 +211,25 @@ function Mail:ScanInbox()
   end
 
   local complete = numItems >= totalItems
+  local purchases = {}
+  local saleGold = 0
+  for i = 1, table.getn(messages) do
+    local message = messages[i]
+    if message and message.class == "AH_SALE_GOLD" and (tonumber(message.cod) or 0) == 0 then
+      saleGold = saleGold + (tonumber(message.money) or 0)
+    end
+    if purchaseClass(message) then
+      local attached = message.items or {}
+      for j = 1, table.getn(attached) do
+        local attachedRow = attached[j]
+        local id = attachedRow and tonumber(attachedRow.itemID)
+        local n = attachedRow and tonumber(attachedRow.count) or 0
+        if id and n > 0 then
+          purchases[id] = (purchases[id] or 0) + n
+        end
+      end
+    end
+  end
   row.mail.claimableGold = claimable
   row.mail.pendingGold = pending
   row.mail.pendingEta = pendingEta
@@ -205,6 +237,8 @@ function Mail:ScanInbox()
   row.mail.snapshotComplete = complete
   row.mail.items = items
   row.mail.messages = messages
+  row.mail.purchaseItems = purchases
+  row.mail.saleGold = saleGold
   row.mail.visibleCount = numItems
   row.mail.totalCount = totalItems
   -- Kept so older readers still see the same counts.
@@ -281,9 +315,42 @@ function Mail:GetClaimableGold()
   return m and (tonumber(m.claimableGold) or 0) or 0
 end
 
+-- Claimable gold, pending gold, completeness, and the purchase aggregate.
+-- Message order is not part of the key.
+function Mail.EconomicsKey(claimable, pending, complete, purchases)
+  local ids = {}
+  if type(purchases) == "table" then
+    for itemID in pairs(purchases) do
+      table.insert(ids, itemID)
+    end
+  end
+  table.sort(ids)
+  local parts = {
+    tostring(tonumber(claimable) or 0),
+    tostring(tonumber(pending) or 0),
+    complete and "1" or "0",
+  }
+  for i = 1, table.getn(ids) do
+    local itemID = ids[i]
+    parts[i + 3] = tostring(itemID) .. "=" .. tostring(purchases[itemID] or 0)
+  end
+  return table.concat(parts, "|")
+end
+
+function Mail:Fingerprint()
+  local m = mailRow()
+  if not m then
+    return "none"
+  end
+  return Mail.EconomicsKey(m.claimableGold, m.pendingGold, m.snapshotComplete, m.purchaseItems)
+end
+
 -- Sale payments only. Personal mail and cash-on-delivery are not gold to take.
 function Mail:GetSaleGold()
   local m = mailRow()
+  if m and m.saleGold ~= nil then
+    return tonumber(m.saleGold) or 0
+  end
   local list = m and m.messages
   if type(list) ~= "table" then
     return 0
@@ -298,25 +365,19 @@ function Mail:GetSaleGold()
   return total
 end
 
-local function purchaseClass(message)
-  if not message then
-    return false
-  end
-  if (tonumber(message.cod) or 0) > 0 then
-    return false
-  end
-  if message.safety ~= "SAFE_AUTO_PROCESS" then
-    return false
-  end
-  return message.class == "AH_PURCHASE_ITEM" or message.class == "AH_WON_ITEM"
-end
-
 -- Purchased and won auction items. Personal mail and cash-on-delivery stay out.
 function Mail:GetPurchaseCount(itemID)
   itemID = tonumber(itemID)
   local m = mailRow()
-  local list = m and m.messages
-  if not itemID or type(list) ~= "table" then
+  if not itemID or not m then
+    return 0
+  end
+  local indexed = m.purchaseItems
+  if type(indexed) == "table" then
+    return tonumber(indexed[itemID]) or 0
+  end
+  local list = m.messages
+  if type(list) ~= "table" then
     return 0
   end
   local total = 0
@@ -338,6 +399,16 @@ end
 function Mail:PurchaseItems()
   local map = {}
   local m = mailRow()
+  local indexed = m and m.purchaseItems
+  if type(indexed) == "table" then
+    for itemID, count in pairs(indexed) do
+      local n = tonumber(count) or 0
+      if n > 0 then
+        map[itemID] = n
+      end
+    end
+    return map
+  end
   local list = m and m.messages
   if type(list) ~= "table" then
     return map

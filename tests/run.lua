@@ -16,7 +16,7 @@ OnyxiaGold.Config = {
   MaxTradeLines = 400,
   MaxDepthLevelsPerItem = 100,
   QuickScanStaleSeconds = 600,
-  SliceBudgetMs = 2,
+  SliceBudgetMs = 0.85,
   SliceWarnMs = 4,
   HighValuePostCopper = 500000,
 }
@@ -94,6 +94,10 @@ load("ItemInfo.lua")
 load("Log.lua")
 load("CandidateCache.lua")
 load("AuctionStop.lua")
+load("Inventory.lua")
+load("Mail.lua")
+load("OwnedAuctions.lua")
+load("Capital.lua")
 load("Tests.lua")
 
 local text, ok = OnyxiaGold.Tests:Run()

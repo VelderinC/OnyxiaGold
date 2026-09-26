@@ -203,24 +203,51 @@ local function betterPlan(a, b)
   return false
 end
 
-local function collectLots(from, units)
-  local seq = {}
+-- Parent links are immutable. The winning chain is walked once, backwards,
+-- then reversed. Completing states do not allocate a sequence table.
+local function nodeCount(node)
+  local count = 0
   local guard = 0
-  local seen = {}
-  while units and units > 0 and guard < 80 do
-    if seen[units] then
-      break
-    end
-    seen[units] = true
-    local step = from[units]
-    if not step then
-      break
-    end
-    table.insert(seq, 1, step.lot)
-    units = step.prev
+  while node and guard < 80 do
+    count = count + 1
+    node = node.parent
     guard = guard + 1
   end
-  return seq
+  return count
+end
+
+local function chainFromNode(node, work)
+  local reversed = {}
+  local guard = 0
+  while node and guard < 80 do
+    reversed[guard + 1] = node.lot
+    node = node.parent
+    guard = guard + 1
+  end
+  local selected = {}
+  local purchased = 0
+  local i = guard
+  local out = 0
+  while i >= 1 do
+    local lot = work[reversed[i]]
+    if lot then
+      out = out + 1
+      selected[out] = {
+        p = lot.p,
+        s = lot.s,
+        cash = lot.cash,
+        level = lot.level,
+        seq = lot.seq,
+        index = lot.index,
+        itemID = lot.itemID,
+        name = lot.name,
+        page = lot.page,
+      }
+      purchased = purchased + lot.s
+    end
+    i = i - 1
+  end
+  return selected, purchased
 end
 
 function Lots.Select(lots, requested, constraints)
@@ -285,11 +312,34 @@ function Lots.Select(lots, requested, constraints)
     quote.capped = true
   end
 
+  local maxStack = 0
+  for i = 1, nitems(work) do
+    local size = tonumber(work[i].s) or 0
+    if size > maxStack then
+      maxStack = size
+    end
+  end
+  -- A stored state is always below the request. The last lot can overshoot
+  -- by less than one stack. Anything past that cannot be a cheaper cover.
+  local overshoot = requested + maxStack - 1
+  if overshoot < requested then
+    overshoot = requested
+  end
+  quote.overshootBound = overshoot
+
   local bestCash = {}
   local from = {}
   bestCash[0] = 0
   local reachable = { 0 }
   local best = nil
+  local frontierMax = tonumber(constraints.frontierMax) or 0
+  local frontier = nil
+  if frontierMax > requested then
+    frontier = {}
+  elseif frontierMax > 0 then
+    frontierMax = requested
+    frontier = {}
+  end
   local scratchCash = Lots.scratchCash
   if not scratchCash then
     scratchCash = {}
@@ -308,8 +358,24 @@ function Lots.Select(lots, requested, constraints)
   local states = 0
   local perf = OnyxiaGold.Performance
   local queued = {}
+  local innerStep = 0
+
+  local function yieldInner()
+    innerStep = innerStep + 1
+    if innerStep % 32 ~= 0 then
+      return
+    end
+    if perf and perf.Add then
+      perf:Add("lotInnerYields", 1)
+    end
+    Lots.lastInnerYieldLot = Lots.activeLot
+    if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+      OnyxiaGold.RefreshSchedule.Tick()
+    end
+  end
 
   for lotIndex = 1, nitems(work) do
+    Lots.activeLot = lotIndex
     if lotIndex % 4 == 0 and OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
       OnyxiaGold.RefreshSchedule.Tick()
     end
@@ -323,26 +389,30 @@ function Lots.Select(lots, requested, constraints)
     end
     states = states + nReach
     for i = 1, nReach do
+      yieldInner()
       local u = scratchUsed[i]
       local cash = scratchCash[u]
       if cash ~= nil and u < requested then
         local newCash = cash + lot.cash
         local allowed = (capital == nil or newCash <= capital)
         local newUnits = u + lot.s
+        if newUnits > overshoot then
+          allowed = false
+        end
         if allowed and bagAllows(newUnits, constraints) then
+          local parent = scratchFrom[u]
+          local count = (parent and parent.count or 0) + 1
           if newUnits >= requested then
             local take = requested - u
             local part = lot.cash
             if take < lot.s and lot.s > 0 then
               part = math.floor(lot.cash * take / lot.s)
             end
-            local chain = collectLots(scratchFrom, u)
-            table.insert(chain, lotIndex)
             local plan = {
               economic = cash + part,
               cash = newCash,
-              count = nitems(chain),
-              chain = chain,
+              count = count,
+              node = { lot = lotIndex, parent = parent, count = count },
             }
             if betterPlan(plan, best) then
               best = plan
@@ -352,10 +422,41 @@ function Lots.Select(lots, requested, constraints)
             local previous = bestCash[newUnits]
             if previous == nil or newCash < previous then
               bestCash[newUnits] = newCash
-              from[newUnits] = { prev = u, lot = lotIndex }
+              from[newUnits] = {
+                prev = u,
+                lot = lotIndex,
+                parent = parent,
+                count = count,
+              }
               if not existed and not queued[newUnits] then
                 queued[newUnits] = true
                 reachable[nitems(reachable) + 1] = newUnits
+              end
+            end
+          end
+          if frontier and u < frontierMax then
+            local hi = newUnits
+            if hi > frontierMax then
+              hi = frontierMax
+            end
+            local q = u + 1
+            while q <= hi do
+              local takeQ = q - u
+              local partQ = lot.cash
+              if takeQ < lot.s and lot.s > 0 then
+                partQ = math.floor(lot.cash * takeQ / lot.s)
+              end
+              local recorded = {
+                economic = cash + partQ,
+                cash = newCash,
+                count = count,
+              }
+              if betterPlan(recorded, frontier[q]) then
+                frontier[q] = recorded
+              end
+              q = q + 1
+              if (q % 32) == 0 then
+                yieldInner()
               end
             end
           end
@@ -368,32 +469,20 @@ function Lots.Select(lots, requested, constraints)
       scratchFrom[u] = nil
     end
   end
+  Lots.activeLot = nil
   if perf and perf.Add then
     perf:Add("lotSelects", 1)
     perf:Add("lotStates", states)
     perf:Add("lotsConsidered", nitems(work))
   end
 
+  if frontier then
+    quote.frontier = frontier
+  end
   if not best then
     return quote
   end
-  local selected = {}
-  local purchased = 0
-  for i = 1, nitems(best.chain) do
-    local lot = work[best.chain[i]]
-    table.insert(selected, {
-      p = lot.p,
-      s = lot.s,
-      cash = lot.cash,
-      level = lot.level,
-      seq = lot.seq,
-      index = lot.index,
-      itemID = lot.itemID,
-      name = lot.name,
-      page = lot.page,
-    })
-    purchased = purchased + lot.s
-  end
+  local selected, purchased = chainFromNode(best.node, work)
   local consumed = requested
   if consumed > purchased then
     consumed = purchased
@@ -412,75 +501,133 @@ function Lots.Select(lots, requested, constraints)
   return quote
 end
 
-local function quoteConstraintKey(constraints)
-  if type(constraints) ~= "table" then
-    return "-"
-  end
-  return tostring(constraints.capital) .. ":" .. tostring(constraints.freeSlots) .. ":"
-    .. tostring(constraints.stackSize) .. ":" .. tostring(constraints.partialRoom) .. ":"
-    .. tostring(constraints.bookGeneration)
+-- Cached quotes are immutable. Callers read them. They do not write fields
+-- or replace selectedLots. A caller that needs a private lot list copies
+-- that list itself. The cache key is book id, generation, quantity, and the
+-- bag/capital constraint. It does not walk auction depth.
+
+Lots.nextBookID = Lots.nextBookID or 0
+
+function Lots.NextBookID()
+  Lots.nextBookID = (Lots.nextBookID or 0) + 1
+  return Lots.nextBookID
 end
 
-local function quoteLevelsKey(levels)
-  local n = nitems(levels)
-  local parts = {}
-  for i = 1, n do
-    local row = levels[i]
-    parts[i] = tostring(row and row.p) .. "x" .. tostring(row and (row.q or row.quantity))
-      .. "x" .. tostring(row and (row.n or row.auctions)) .. "x" .. tostring(row and row.s)
+function Lots.AssignBook(book)
+  if type(book) ~= "table" then
+    return book
   end
-  return table.concat(parts, ";")
-end
-
-local function copyQuote(quote)
-  local copy = {}
-  for key, value in pairs(quote) do
-    if key ~= "selectedLots" then
-      copy[key] = value
-    end
+  if book.id == nil then
+    book.id = Lots.NextBookID()
   end
-  local lots = {}
-  local selected = quote.selectedLots or {}
-  for i = 1, nitems(selected) do
-    local lot = selected[i]
-    lots[i] = {
-      p = lot.p,
-      s = lot.s,
-      cash = lot.cash,
-      level = lot.level,
-      seq = lot.seq,
-      index = lot.index,
-      itemID = lot.itemID,
-      name = lot.name,
-      page = lot.page,
-    }
+  if book.generation == nil then
+    book.generation = 0
   end
-  copy.selectedLots = lots
-  return copy
+  return book
 end
 
 function Lots.ClearQuoteCache()
   Lots.quoteCache = {}
 end
 
+function Lots.DropBook(bookID)
+  if Lots.quoteCache and bookID ~= nil then
+    Lots.quoteCache[bookID] = nil
+  end
+end
+
+function Lots.DropGeneration(bookID, generation)
+  local books = Lots.quoteCache
+  local page = books and bookID ~= nil and books[bookID]
+  if type(page) == "table" and generation ~= nil then
+    page[generation] = nil
+    local perf = OnyxiaGold.Performance
+    if perf and perf.Add then
+      perf:Add("quoteCacheEvictions", 1)
+      perf:Add("quoteInvalidations", 1)
+    end
+  end
+end
+
 Lots.quoteCache = Lots.quoteCache or {}
+
+local function bookIdentity(levels, constraints)
+  if type(constraints) == "table" and constraints.bookID ~= nil then
+    return constraints.bookID, tonumber(constraints.bookGeneration) or 0
+  end
+  if type(levels) == "table" and levels.id ~= nil and type(levels.levels) == "table" then
+    return levels.id, tonumber(levels.generation) or 0
+  end
+  if type(levels) == "table" then
+    return levels, tonumber(constraints and constraints.bookGeneration) or 0
+  end
+  return 0, 0
+end
+
+local function cacheKeys(bookID, generation, quantity, constraints)
+  constraints = constraints or {}
+  return {
+    bookID,
+    generation,
+    quantity,
+    constraints.capital or false,
+    constraints.freeSlots or false,
+    constraints.stackSize or false,
+    constraints.partialRoom or false,
+    constraints.frontierMax or false,
+  }
+end
+
+local function cacheFetch(keys)
+  local node = Lots.quoteCache
+  for i = 1, 7 do
+    if type(node) ~= "table" then
+      return nil
+    end
+    node = node[keys[i]]
+  end
+  if type(node) ~= "table" then
+    return nil
+  end
+  return node[keys[8]]
+end
+
+local function cachePut(keys, quote)
+  local node = Lots.quoteCache
+  for i = 1, 7 do
+    local child = node[keys[i]]
+    if type(child) ~= "table" then
+      child = {}
+      node[keys[i]] = child
+    end
+    node = child
+  end
+  node[keys[8]] = quote
+end
 
 function Lots.Quote(levels, requested, constraints)
   local perf = OnyxiaGold.Performance
   if perf and perf.Add then
     perf:Add("lotQuotes", 1)
+    perf:Add("quoteKeyBuilds", 1)
   end
-  local key = tostring(math.floor(tonumber(requested) or 0)) .. "#" .. quoteConstraintKey(constraints)
-    .. "#" .. quoteLevelsKey(levels)
-  local cached = Lots.quoteCache[key]
+  local quantity = math.floor(tonumber(requested) or 0)
+  local bookID, generation = bookIdentity(levels, constraints)
+  local keys = cacheKeys(bookID, generation, quantity, constraints)
+  local cached = cacheFetch(keys)
   if cached then
     if perf and perf.Add then
       perf:Add("lotQuoteHits", 1)
+      perf:Add("quoteCacheHits", 1)
     end
-    return copyQuote(cached)
+    return cached
   end
-  local lots = Lots.Expand(levels, requested)
-  local quote = Lots.Select(lots, requested, constraints)
+  if perf and perf.Add then
+    perf:Add("quoteCacheMisses", 1)
+    perf:Add("quoteCacheEntries", 1)
+  end
+  local lots = Lots.Expand(levels, quantity)
+  local quote = Lots.Select(lots, quantity, constraints)
   quote.requestedQuantity = quote.requestedUnits
   quote.filledQuantity = quote.purchasedUnits
   quote.totalCost = quote.cashRequired
@@ -492,8 +639,20 @@ function Lots.Quote(levels, requested, constraints)
   end
   local last = quote.selectedLots[nitems(quote.selectedLots)]
   quote.marginalUnitCost = last and last.p or nil
-  Lots.quoteCache[key] = quote
-  return copyQuote(quote)
+  if type(constraints) == "table" and constraints.covered ~= nil then
+    quote.depthCoveredQuantity = tonumber(constraints.covered) or 0
+  end
+  quote.immutable = true
+  local stack = type(constraints) == "table" and tonumber(constraints.stackSize) or nil
+  if stack and stack > 0 then
+    local slots = slotsFor(quote.purchasedUnits or 0, constraints.partialRoom, stack)
+    quote.newSlotsRequired = slots
+    quote.peakSlots = slots
+    local leftoverSlots = slotsFor(quote.excessUnits or 0, 0, stack)
+    quote.leftoverSlots = leftoverSlots
+  end
+  cachePut(keys, quote)
+  return quote
 end
 
 function Lots.RequiredBid(minBid, bidAmount, minIncrement)
@@ -695,16 +854,50 @@ function Lots.FlipMargin(args)
     covered = sum
   end
   local levels = Lots.WholeLevels(raw, covered)
-  local totalQty, totalN = bookTotals(levels)
+  local n = nitems(levels)
+  if n < 1 then
+    return nil
+  end
+  local prefix = {}
+  local totalQty = 0
+  local totalN = 0
+  for i = 1, n do
+    local row = levels[i]
+    totalQty = totalQty + (tonumber(row.q) or 0)
+    totalN = totalN + (tonumber(row.n) or 0)
+    prefix[i] = totalQty
+  end
   if totalQty < 1 or totalN < 1 then
     return nil
+  end
+  -- P25 position in the original book. Removing one lot shifts only the
+  -- tail, so each candidate is a binary search rather than a new book.
+  local function priceAt(pos)
+    if pos <= 0 then
+      pos = 1
+    end
+    if pos > totalQty then
+      pos = totalQty
+    end
+    local lo = 1
+    local hi = n
+    while lo < hi do
+      local mid = math.floor((lo + hi) / 2)
+      if prefix[mid] < pos then
+        lo = mid + 1
+      else
+        hi = mid
+      end
+    end
+    local row = levels[lo]
+    return row and tonumber(row.p) or nil
   end
   local own = tonumber(args.ownMinimum)
   if own and own < 1 then
     own = nil
   end
   local best
-  for i = 1, nitems(levels) do
+  for i = 1, n do
     if i % 8 == 0 and OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
       OnyxiaGold.RefreshSchedule.Tick()
     end
@@ -712,10 +905,37 @@ function Lots.FlipMargin(args)
     local unit = math.floor(tonumber(row.p) or 0)
     local stack = math.floor(tonumber(row.s) or 0)
     local copies = math.floor(tonumber(row.n) or 0)
-    if unit > 0 and stack > 0 and copies > 0 then
-      local rest, restQty, restN = remainderBook(levels, i)
+    local qty = tonumber(row.q) or 0
+    if unit > 0 and stack > 0 and copies > 0 and qty > 0 then
+      local newCopies = copies - 1
+      local newQty = qty - stack
+      if newQty > newCopies * stack then
+        newQty = newCopies * stack
+      end
+      local removed = qty
+      local kept = 0
+      if newCopies > 0 and newQty > 0 then
+        removed = qty - newQty
+        kept = newQty
+      end
+      local restQty = totalQty - removed
+      local restN = totalN - 1
       local deep = stack * 4 < totalQty and restN >= 2
-      local sale = deep and percentileUnit(rest, restQty) or nil
+      local sale
+      if deep and restQty > 0 then
+        local target = restQty * 0.25
+        if target <= 0 then
+          target = 1
+        end
+        local start = prefix[i - 1] or 0
+        if target <= start then
+          sale = priceAt(target)
+        elseif target <= start + kept then
+          sale = unit
+        else
+          sale = priceAt(target + removed)
+        end
+      end
       sale = sale and math.floor(tonumber(sale) or 0) or nil
       if sale and sale > 0 and unit < sale and (not own or sale >= own) then
         local deposit = tonumber(args.deposit)

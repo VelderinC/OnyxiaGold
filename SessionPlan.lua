@@ -629,7 +629,12 @@ local function copyBook(book)
       }
     end
   end
-  return { levels = levels, covered = book and book.covered or 0 }
+  local copy = { levels = levels, covered = book and book.covered or 0 }
+  if book and book.id ~= nil then
+    copy.id = book.id
+    copy.generation = book.generation or 0
+  end
+  return copy
 end
 
 local function basisCost(session, itemID, units)
@@ -1005,6 +1010,9 @@ local function pricePath(first, second)
   local prevConsumedA = 0
   local b = 1
   while b <= maxB do
+    if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+      OnyxiaGold.Performance:Add("pathQuantitySteps", 1)
+    end
     local need = b * link.count
     local aCrafts = math.floor((need + link.per - 1) / link.per)
     if aCrafts < 1 or aCrafts > maxA then

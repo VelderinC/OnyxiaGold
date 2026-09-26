@@ -31,12 +31,17 @@ end
 function Capital:RefreshLiquid()
   local row = rec()
   local copper = tonumber(GetMoney()) or 0
+  local changed = false
   if row then
-    row.capital.liquid = copper
-    row.capital.timestamp = time()
-    row.stateTimestamps.gold = time()
+    local previous = tonumber(row.capital.liquid)
+    if previous ~= copper then
+      changed = true
+      row.capital.liquid = copper
+      row.capital.timestamp = time()
+      row.stateTimestamps.gold = time()
+    end
   end
-  return copper
+  return copper, changed
 end
 
 function Capital:GetLiquid()

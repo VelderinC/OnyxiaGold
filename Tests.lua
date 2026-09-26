@@ -1563,6 +1563,7 @@ function Tests:Run()
   end
 
   self:RunRescue(check, Lots)
+  self:RunZeroStutter(check, Lots)
 
   local passed = nitems(lines) - failed
   local head
@@ -1903,5 +1904,502 @@ function Tests:RunRescue(check, Lots)
       yields >= 2)
   else
     check("the scheduler yields without a frame timer", false)
+  end
+end
+
+function Tests:RunZeroStutter(check, Lots)
+  local Perf = OnyxiaGold.Performance
+  local Schedule = OnyxiaGold.RefreshSchedule
+  local Revisions = OnyxiaGold.Revisions
+
+  if Schedule and Schedule.BudgetMs then
+    local savedBudget = OnyxiaGold.Config.SliceBudgetMs
+    local savedMode = Schedule.mode
+    Schedule.mode = "safe"
+    OnyxiaGold.Config.SliceBudgetMs = 2
+    local clamped = Schedule.BudgetMs()
+    check(string.format("safe mode clamps a 2 ms config to %.3f ms", clamped),
+      clamped <= 1 and clamped >= 0.5)
+    if Schedule.SetMode then
+      Schedule:SetMode("aggressive")
+      local aggressive = Schedule.BudgetMs()
+      check(string.format("aggressive mode stays at or under 2 ms (%.3f)", aggressive),
+        aggressive <= 2 and aggressive >= 0.5)
+      Schedule:SetMode("safe")
+    else
+      check("aggressive mode stays at or under 2 ms", false)
+    end
+    OnyxiaGold.Config.SliceBudgetMs = savedBudget
+    Schedule.mode = savedMode or "safe"
+  else
+    check("safe mode clamps a 2 ms config", false)
+    check("aggressive mode stays at or under 2 ms", false)
+  end
+
+  if Lots and Lots.Quote and Perf and Perf.Count then
+    Lots.ClearQuoteCache()
+    local levels = {}
+    for i = 1, 12 do
+      levels[i] = { p = 1000 + i * 10, q = 5, n = 1, s = 5 }
+    end
+    local caps = { capital = 1000000 }
+    Lots.Quote(levels, 10, caps)
+    local selects = Perf:Count("lotSelects")
+    local serial = Perf:Count("depthSerialisations")
+    local copies = Perf:Count("quoteBookCopies")
+    for _ = 1, 100 do
+      Lots.Quote(levels, 10, caps)
+    end
+    check(string.format(
+      "one hundred cached quotes ran %d extra selects",
+      Perf:Count("lotSelects") - selects),
+      Perf:Count("lotSelects") == selects
+      and Perf:Count("depthSerialisations") == serial
+      and Perf:Count("quoteBookCopies") == copies)
+
+    local bookA = { levels = levels }
+    local otherLevels = { { p = 50, q = 5, n = 1, s = 5 } }
+    local bookB = { levels = otherLevels }
+    Lots.AssignBook(bookA)
+    Lots.AssignBook(bookB)
+    Lots.Quote(bookA, 10, { capital = 1000000, bookID = bookA.id, bookGeneration = bookA.generation })
+    local afterA = Perf:Count("lotSelects")
+    Lots.Quote(bookA, 10, { capital = 1000000, bookID = bookA.id, bookGeneration = bookA.generation })
+    Lots.DropGeneration(bookB.id, bookB.generation)
+    Lots.Quote(bookA, 10, { capital = 1000000, bookID = bookA.id, bookGeneration = bookA.generation })
+    check("dropping another book's generation leaves this quote cached",
+      Perf:Count("lotSelects") == afterA)
+  else
+    check("one hundred cached quotes ran 0 extra selects", false)
+    check("dropping another book's generation leaves this quote cached", false)
+  end
+
+  if Lots and Lots.Quote then
+    local wide = { { p = 100, q = 20, n = 1, s = 20 } }
+    local quoted = Lots.Quote(wide, 8, { capital = 1000000 })
+    check(string.format(
+      "an 8-unit buy of a 20 stack stops at %d units, bound %s",
+      quoted.purchasedUnits or 0, tostring(quoted.overshootBound)),
+      quoted.complete
+      and quoted.purchasedUnits == 20
+      and quoted.purchasedUnits <= (quoted.overshootBound or 0)
+      and quoted.overshootBound == 27)
+  else
+    check("an 8-unit buy of a 20 stack stays inside the overshoot bound", false)
+  end
+
+  if Lots and Lots.Expand and Lots.Select and Schedule then
+    local levels = {}
+    for i = 1, 40 do
+      levels[i] = { p = 100 + i, q = 1, n = 1, s = 1 }
+    end
+    local expanded = Lots.Expand(levels, 20)
+    local beforeInner = Perf and Perf.Count and Perf:Count("lotInnerYields") or 0
+    local savedSlice = Schedule.activeSlice
+    local savedEvery = Schedule.yieldEvery
+    Schedule.activeSlice = { steps = 0 }
+    Schedule.yieldEvery = 1
+    local yields = 0
+    local worker = coroutine.create(function()
+      Lots.Select(expanded, 20, { capital = 1000000 })
+    end)
+    local guard = 0
+    while coroutine.status(worker) ~= "dead" and guard < 400 do
+      guard = guard + 1
+      coroutine.resume(worker)
+      if coroutine.status(worker) ~= "dead" then
+        yields = yields + 1
+      end
+    end
+    Schedule.activeSlice = savedSlice
+    Schedule.yieldEvery = savedEvery
+    local inner = Perf and Perf.Count and (Perf:Count("lotInnerYields") - beforeInner) or 0
+    check(string.format("the lot search yielded inside one book (%d yields, %d inner)", yields, inner),
+      yields >= 1 and inner >= 1)
+  else
+    check("the lot search yielded inside one book", false)
+  end
+
+  if Lots and Lots.FlipMargin and OnyxiaGold.Prices and OnyxiaGold.Prices.PercentileFromDepth then
+    local function reference(levels, deposit)
+      local whole = Lots.WholeLevels(levels, 1000000)
+      local totalQty = 0
+      local totalN = 0
+      for i = 1, nitems(whole) do
+        totalQty = totalQty + (whole[i].q or 0)
+        totalN = totalN + (whole[i].n or 0)
+      end
+      local best
+      for i = 1, nitems(whole) do
+        local row = whole[i]
+        local unit = math.floor(row.p or 0)
+        local stack = math.floor(row.s or 0)
+        local copies = math.floor(row.n or 0)
+        if unit > 0 and stack > 0 and copies > 0 then
+          local rest = {}
+          for j = 1, nitems(whole) do
+            local src = whole[j]
+            local n = src.n
+            local q = src.q
+            if j == i then
+              n = n - 1
+              q = q - stack
+              if q > n * stack then
+                q = n * stack
+              end
+            end
+            if n > 0 and q > 0 then
+              rest[nitems(rest) + 1] = { p = src.p, q = q, n = n, s = src.s }
+            end
+          end
+          local restQty = 0
+          local restN = 0
+          for j = 1, nitems(rest) do
+            restQty = restQty + rest[j].q
+            restN = restN + rest[j].n
+          end
+          local sale
+          if stack * 4 < totalQty and (totalN - 1) >= 2 and restQty > 0 then
+            sale = OnyxiaGold.Prices.PercentileFromDepth(rest, restQty, 0.25)
+          end
+          sale = sale and math.floor(tonumber(sale) or 0) or nil
+          if sale and sale > 0 and unit < sale then
+            local cash = unit * stack
+            local proceeds = math.floor(sale * stack * 9500 / 10000)
+            local profit = proceeds - cash - deposit
+            if profit > 0 and (not best or profit > best.profit or (profit == best.profit and cash < best.cash)) then
+              best = { profit = profit, unit = unit, count = stack, saleUnit = sale, cash = cash }
+            end
+          end
+        end
+      end
+      return best
+    end
+    local seed = 17
+    local function rnd()
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return seed
+    end
+    local matched = 0
+    local trials = 8
+    for trial = 1, trials do
+      local levels = {}
+      local rows = 4 + (rnd() % 5)
+      for i = 1, rows do
+        local stack = (rnd() % 2 == 0) and 5 or 20
+        local copies = 1 + (rnd() % 3)
+        levels[i] = {
+          p = 1000 + i * 250 + (rnd() % 50),
+          q = stack * copies,
+          n = copies,
+          s = stack,
+        }
+      end
+      local fast = Lots.FlipMargin({
+        levels = levels,
+        covered = 1000000,
+        deposit = 100,
+        cutBPS = 500,
+        itemID = 9000 + trial,
+        name = "Trial",
+      })
+      local slow = reference(levels, 100)
+      local same = (fast == nil and slow == nil)
+        or (fast and slow
+          and fast.profit == slow.profit
+          and fast.unit == slow.unit
+          and fast.count == slow.count
+          and fast.saleUnit == slow.saleUnit)
+      if same then
+        matched = matched + 1
+      end
+    end
+    check(string.format("flip margin matched the remainder book on %d/%d books", matched, trials),
+      matched == trials)
+  else
+    check("flip margin matched the remainder book", false)
+  end
+
+  local Cache = OnyxiaGold.CandidateCache
+  local Plan = OnyxiaGold.SessionPlan
+  if Cache and Cache.BuildRecipeGraph and Perf and Perf.Count then
+    local function recipe(spellID, outputID, inputID)
+      return {
+        deterministic = true,
+        profession = "Alchemy",
+        spellID = spellID,
+        name = "Recipe " .. tostring(spellID),
+        outputItemID = outputID,
+        outputCount = 1,
+        reagents = { { itemID = inputID, count = 1, name = "In" } },
+      }
+    end
+    local function scaleBook(count)
+      local recipes = {}
+      for i = 1, count do
+        recipes[i] = recipe(300000 + count * 1000 + i, 400000 + count * 1000 + i, 800000 + count * 1000 + i)
+      end
+      recipes[count + 1] = recipe(310000 + count, 700001, 810001)
+      recipes[count + 2] = recipe(310100 + count, 700011, 700001)
+      recipes[count + 3] = recipe(310200 + count, 700002, 810002)
+      recipes[count + 4] = recipe(310300 + count, 700012, 700002)
+      recipes[count + 5] = recipe(310400 + count, 700003, 810003)
+      recipes[count + 6] = recipe(310500 + count, 700013, 700003)
+      return { Alchemy = { recipes = recipes } }
+    end
+    local sizes = { 25, 50, 100 }
+    local scaleOk = true
+    for s = 1, nitems(sizes) do
+      local count = sizes[s]
+      local beforePairs = Perf:Count("pathPairsConsidered")
+      local beforeWalks = Perf:Count("knownCandidateWalks")
+      Cache:BuildRecipeGraph(scaleBook(count))
+      local pairs = Perf:Count("pathPairsConsidered") - beforePairs
+      local walks = Perf:Count("knownCandidateWalks") - beforeWalks
+      local builds = 1
+      if walks ~= 1 or pairs ~= 3 or pairs >= count * (count - 1) then
+        scaleOk = false
+      end
+      if builds ~= 1 then
+        scaleOk = false
+      end
+    end
+    check("path pairing counts the three real edges, not every recipe pair", scaleOk)
+
+    local walks = Perf:Count("knownCandidateWalks")
+    local builds = Perf:Count("pathTopologyBuilds")
+    local rows = Perf:Count("marketRowsSeen")
+    local seeds = Cache:PathSeeds() or {}
+    if Plan and Plan.PricePath then
+      for i = 1, nitems(seeds) do
+        local seed = seeds[i]
+        if seed and seed.first and seed.second then
+          Plan.PricePath(seed.first, seed.second)
+        end
+      end
+    end
+    check(string.format(
+      "pricing cached paths walked %d extra books and %d extra market rows",
+      Perf:Count("knownCandidateWalks") - walks,
+      Perf:Count("marketRowsSeen") - rows),
+      Perf:Count("knownCandidateWalks") == walks
+      and Perf:Count("pathTopologyBuilds") == builds
+      and Perf:Count("marketRowsSeen") == rows)
+  else
+    check("path pairing counts the three real edges, not every recipe pair", false)
+    check("pricing cached paths walked 0 extra books", false)
+  end
+
+  if Cache and Cache.DiscoverFlips and Perf and OnyxiaGold.Database and OnyxiaGold.Database.EnsureMarketForWrite then
+    local market = OnyxiaGold.Database:EnsureMarketForWrite("Onyxia|Horde")
+    market.latest = {}
+    local seeded = 10000
+    local nowStamp = os.time()
+    for itemID = 1, seeded do
+      market.latest[itemID] = {
+        itemID = itemID,
+        name = "Thin " .. tostring(itemID),
+        timestamp = nowStamp,
+        source = "scan",
+        buyoutAuctionCount = 1,
+        buyoutQuantity = 1,
+        depth = { { p = 1000, q = 1, n = 1, s = 1 } },
+        depthCoveredQuantity = 1,
+      }
+    end
+    local seen = Perf:Count("marketRowsSeen")
+    local deep = Perf:Count("flipDeepEvaluated")
+    local cheap = Perf:Count("flipCheapRejected")
+    Cache:DiscoverFlips()
+    local saw = Perf:Count("marketRowsSeen") - seen
+    local evaluated = Perf:Count("flipDeepEvaluated") - deep
+    local rejected = Perf:Count("flipCheapRejected") - cheap
+    check(string.format(
+      "cheap filter kept %d of %d thin rows out of FlipMargin",
+      rejected, saw),
+      saw >= seeded and evaluated * 10 < saw and rejected > 0)
+
+    local kept = Cache.flips
+    market.latest = {}
+    for itemID = 1, 40 do
+      market.latest[itemID] = {
+        itemID = itemID,
+        name = "Cancel " .. tostring(itemID),
+        timestamp = nowStamp,
+        source = "scan",
+        buyoutAuctionCount = 1,
+        depth = { { p = 10, q = 1, n = 1, s = 1 } },
+      }
+    end
+    Cache.rowHook = function(seenRow)
+      if seenRow >= 16 and Revisions and Revisions.Bump then
+        Revisions:Bump("market")
+        Cache.rowHook = nil
+      end
+    end
+    local cancelled = Cache:DiscoverFlips()
+    Cache.rowHook = nil
+    check("a market change mid-walk does not publish flips",
+      cancelled == nil and Cache.flips == kept)
+    market.latest = {}
+  else
+    check("cheap filter kept thin rows out of FlipMargin", false)
+    check("a market change mid-walk does not publish flips", false)
+  end
+
+  local Inventory = OnyxiaGold.Inventory
+  if Inventory and Inventory.SameEconomics and Schedule and Schedule.New then
+    local left = {
+      bags = { [2589] = 20, [2447] = 5 },
+      partialRoom = { [2589] = 0, [2447] = 15 },
+      stackSize = { [2589] = 20, [2447] = 20 },
+      freeSlots = 8,
+    }
+    local right = {
+      bags = { [2447] = 5, [2589] = 20 },
+      partialRoom = { [2447] = 15, [2589] = 0 },
+      stackSize = { [2447] = 20, [2589] = 20 },
+      freeSlots = 8,
+    }
+    local clock = Schedule.New(1)
+    local snaps = Perf and Perf.Count and Perf:Count("unchangedSnapshots") or 0
+    local scheduled = clock:PushCharacter(0, "bags", false)
+    check("a bag rearrange with the same counts does not schedule a plan",
+      Inventory.SameEconomics(left, right)
+      and scheduled == false
+      and clock.job == nil
+      and (not Perf or Perf:Count("unchangedSnapshots") == snaps + 1))
+  else
+    check("a bag rearrange with the same counts does not schedule a plan", false)
+  end
+
+  local Mail = OnyxiaGold.Mail
+  local Owned = OnyxiaGold.OwnedAuctions
+  if Mail and Mail.Fingerprint and Owned and Owned.FingerprintMaps and Schedule and Schedule.New then
+    local first = Mail.EconomicsKey(500, 200, true, { [9] = 20, [10] = 1 })
+    local second = Mail.EconomicsKey(500, 200, true, { [10] = 1, [9] = 20 })
+    local different = Mail.EconomicsKey(500, 200, true, { [9] = 19, [10] = 1 })
+    local sumA = Owned.FingerprintMaps(
+      { [1] = 10, [2] = 5 },
+      { [1] = 100, [2] = 40 },
+      { [1] = 0, [2] = 1 }
+    )
+    local sumB = Owned.FingerprintMaps(
+      { [1] = 5, [2] = 10 },
+      { [1] = 40, [2] = 100 },
+      { [1] = 1, [2] = 0 }
+    )
+    local clock = Schedule.New(1)
+    clock:PushCharacter(0, "mail", false)
+    clock:PushCharacter(0, "owned", false)
+    check("identical mail and owner snapshots schedule no plan",
+      first == second and first ~= different and sumA ~= sumB and clock.job == nil)
+  else
+    check("identical mail and owner snapshots schedule no plan", false)
+  end
+
+  if Schedule and Schedule.New and Revisions and Revisions.BumpCharacter then
+    local clock = Schedule.New(1)
+    for _ = 1, 8 do
+      clock:PushCharacter(0.01, "post", true)
+    end
+    local early = clock:Poll(0.2)
+    local started = clock:Poll(1.1)
+    check("a transaction storm schedules one plan",
+      early ~= "start" and started == "start")
+
+    local running = Schedule.New(0)
+    running.quiet = 0
+    local published = { { name = "published" } }
+    local savedPlanner = OnyxiaGold.ActionPlanner
+    OnyxiaGold.ActionPlanner = {
+      building = true,
+      painting = published,
+      actions = published,
+    }
+    running.runner = function()
+      Schedule.Tick()
+      Revisions:BumpCharacter("money")
+      Schedule.Tick()
+    end
+    running:Push(0, "plan", "bags")
+    local status = running:Begin(0)
+    local actions = OnyxiaGold.ActionPlanner.actions
+    check("a stale plan aborts without publishing and leaves one replacement",
+      status == "cancelled"
+      and actions == published
+      and OnyxiaGold.ActionPlanner.building == false
+      and running.pending == true
+      and running.job == "plan"
+      and (running.staleCancels or 0) == 1)
+    OnyxiaGold.ActionPlanner = savedPlanner
+
+    local paused = Schedule.New(0)
+    paused.quiet = 0
+    local ran = 0
+    paused.runner = function()
+      ran = ran + 1
+    end
+    paused:SetInteraction("searching", true)
+    paused:Push(0, "market", "scan")
+    local deferred = paused:Begin(0)
+    local ranWhilePaused = ran
+    paused:SetInteraction("searching", false)
+    local waiting = paused:Begin(0)
+    local resumed = paused:Begin(1)
+    check(string.format("interaction pause deferred market work (%s, then %s, ran %d)", tostring(deferred), tostring(resumed), ran),
+      deferred == "deferred" and ranWhilePaused == 0 and waiting ~= "start" and ran == 1)
+  else
+    check("a transaction storm schedules one plan", false)
+    check("a stale plan aborts without publishing", false)
+    check("interaction pause deferred market work", false)
+  end
+
+  if Perf and Perf.Begin and Perf.End then
+    Perf:Begin("planner")
+    Perf:Begin("paths")
+    local nested = Perf.stack and nitems(Perf.stack) == 2 and Perf.stack[1].name == "planner"
+    Perf:End("paths")
+    local parent = Perf.stack and nitems(Perf.stack) == 1 and Perf.stack[1].name == "planner"
+    Perf:End("planner")
+    local clear = not Perf.stack or nitems(Perf.stack) == 0
+    check("nested timings keep the parent section", nested and parent and clear)
+  else
+    check("nested timings keep the parent section", false)
+  end
+
+  local Session = OnyxiaGold.SessionState
+  if Session and Session.Begin and Session.Reserve and Lots and Lots.AssignBook and Perf then
+    Session:Begin(1000000, 1000000)
+    local bookA = { levels = { { p = 1000, q = 20, n = 1, s = 20 } }, covered = 20 }
+    local bookB = { levels = { { p = 2000, q = 20, n = 1, s = 20 } }, covered = 20 }
+    Lots.AssignBook(bookA)
+    Lots.AssignBook(bookB)
+    Session.depth[11] = bookA
+    Session.depth[22] = bookB
+    Lots.ClearQuoteCache()
+    Session:Quote(22, 20)
+    local genB = bookB.generation or 0
+    local mutated = Perf:Count("depthBooksMutated")
+    local bagCopies = Perf:Count("sessionBagCopies")
+    local quoteA = Session:Quote(11, 20)
+    local reserved = Session:Reserve({
+      cash = quoteA.cashRequired,
+      inputs = { { itemID = 11, buyUnits = 20 } },
+    })
+    local liveA = Session.depth[11]
+    local liveB = Session.depth[22]
+    local selectsAfter = Perf:Count("lotSelects")
+    Session:Quote(22, 20, 1000000)
+    check("reserving item A mutates only A's book and leaves B cached",
+      reserved
+      and liveA and (liveA.generation or 0) == 1
+      and liveB == bookB
+      and (liveB.generation or 0) == genB
+      and Perf:Count("sessionBagCopies") == bagCopies
+      and Perf:Count("depthBooksMutated") == mutated + 1
+      and Perf:Count("lotSelects") == selectsAfter)
+  else
+    check("reserving item A mutates only A's book and leaves B cached", false)
   end
 end

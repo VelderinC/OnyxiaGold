@@ -43,6 +43,10 @@ function Owned:Scan()
   local asking = 0
   local expectedNet = 0
   local bids = 0
+  local listedCount = {}
+  local cheapestUnit = {}
+  local listingCount = {}
+  local bidState = {}
 
   for i = 1, numBatch do
     local name, _, count, _, _, _, minBid, _, buyoutPrice, bidAmount = GetAuctionItemInfo("owner", i)
@@ -73,6 +77,21 @@ function Owned:Scan()
     if bidAmount > 0 then
       bids = bids + bidAmount
     end
+    if itemID and count > 0 then
+      listedCount[itemID] = (listedCount[itemID] or 0) + count
+      listingCount[itemID] = (listingCount[itemID] or 0) + 1
+      if buyoutPrice > 0 then
+        local unit = math.floor(buyoutPrice / count)
+        if unit > 0 and (not cheapestUnit[itemID] or unit < cheapestUnit[itemID]) then
+          cheapestUnit[itemID] = unit
+        end
+      end
+      if bidAmount > 0 then
+        bidState[itemID] = 1
+      elseif bidState[itemID] == nil then
+        bidState[itemID] = 0
+      end
+    end
   end
 
   local complete = numBatch >= total
@@ -84,6 +103,10 @@ function Owned:Scan()
   row.auctions.shown = numBatch
   row.auctions.total = total
   row.auctions.complete = complete
+  row.auctions.listedCountByItemID = listedCount
+  row.auctions.cheapestUnitByItemID = cheapestUnit
+  row.auctions.listingCountByItemID = listingCount
+  row.auctions.bidStateByItemID = bidState
   row.stateTimestamps.auctions = time()
   if not complete then
     OnyxiaGold.Log:Debug("Auctions", string.format(
@@ -130,7 +153,14 @@ end
 function Owned:GetListedCount(itemID)
   itemID = tonumber(itemID)
   local row = rec()
-  if not itemID or not row or type(row.auctions.listings) ~= "table" then
+  if not itemID or not row or not row.auctions then
+    return 0
+  end
+  local indexed = row.auctions.listedCountByItemID
+  if type(indexed) == "table" then
+    return tonumber(indexed[itemID]) or 0
+  end
+  if type(row.auctions.listings) ~= "table" then
     return 0
   end
   local n = 0
@@ -142,6 +172,20 @@ function Owned:GetListedCount(itemID)
     end
   end
   return n
+end
+
+function Owned:GetCheapestUnit(itemID)
+  itemID = tonumber(itemID)
+  local row = rec()
+  local indexed = row and row.auctions and row.auctions.cheapestUnitByItemID
+  if not itemID or type(indexed) ~= "table" then
+    return nil
+  end
+  local unit = tonumber(indexed[itemID])
+  if unit and unit > 0 then
+    return unit
+  end
+  return nil
 end
 
 function Owned:GetAskingValue()
@@ -159,21 +203,51 @@ function Owned:GetCurrentBids()
   return row and (tonumber(row.auctions.currentBids) or 0) or 0
 end
 
+-- Per item: listed count, cheapest unit, and whether any listing has a bid.
+-- An additive sum of those fields can collide. This key cannot.
+function Owned.FingerprintMaps(listed, cheapest, bidState)
+  local ids = {}
+  local function add(map)
+    if type(map) ~= "table" then
+      return
+    end
+    for itemID in pairs(map) do
+      ids[itemID] = true
+    end
+  end
+  add(listed)
+  add(cheapest)
+  add(bidState)
+  local ordered = {}
+  for itemID in pairs(ids) do
+    table.insert(ordered, itemID)
+  end
+  table.sort(ordered)
+  local parts = {}
+  for i = 1, table.getn(ordered) do
+    local itemID = ordered[i]
+    local count = listed and listed[itemID] or 0
+    local unit = cheapest and cheapest[itemID] or 0
+    local bid = bidState and bidState[itemID] or 0
+    parts[i] = tostring(itemID) .. ":" .. tostring(count) .. ":" .. tostring(unit) .. ":" .. tostring(bid)
+  end
+  return table.concat(parts, "|")
+end
+
 function Owned:Fingerprint()
   local row = rec()
-  local listings = row and row.auctions and row.auctions.listings
-  if type(listings) ~= "table" then
-    return "0"
+  local auctions = row and row.auctions
+  if not auctions then
+    return ""
   end
-  local n = table.getn(listings)
-  local acc = n
-  for i = 1, n do
-    local listing = listings[i]
-    acc = acc + (tonumber(listing and listing.itemID) or 0)
-    acc = acc + (tonumber(listing and listing.count) or 0)
-    acc = acc + (tonumber(listing and listing.buyout) or 0)
+  if type(auctions.listedCountByItemID) == "table" then
+    return Owned.FingerprintMaps(
+      auctions.listedCountByItemID,
+      auctions.cheapestUnitByItemID,
+      auctions.bidStateByItemID
+    )
   end
-  return tostring(acc) .. ":" .. tostring(n)
+  return ""
 end
 
 function Owned:GetSnapshotAge()

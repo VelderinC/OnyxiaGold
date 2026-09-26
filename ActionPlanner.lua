@@ -40,6 +40,10 @@ OnyxiaGold = OnyxiaGold or {}
 OnyxiaGold.ActionPlanner = OnyxiaGold.ActionPlanner or {}
 
 local Planner = OnyxiaGold.ActionPlanner
+
+-- The session keeps a bounded action list. Work scales with the candidates
+-- that are actually priced, not with every recipe pair.
+Planner.MAX_ACTIONS = 20
 Planner.actions = {}
 Planner.locked = {}
 Planner.session = nil
@@ -418,14 +422,16 @@ end
 
 -- true/false if priced, nil if the quote is incomplete.
 local function bagFit(opp, n)
-  local lines = planInputs(opp, n)
-  if not lines then
+  local planner = OnyxiaGold.ActionPlanner
+  local personal = planner and planner.GetPersonalQuote and planner:GetPersonalQuote(opp, n)
+  if not personal or not personal.complete then
     return nil, 0
   end
-  local slots, free = bagSlotsFor(lines)
+  local slots = personal.slots
   if slots == nil then
-    return true, 0
+    return true, personal.newSlotsRequired or 0
   end
+  local free = personal.freeSlots or 0
   return slots <= free, slots
 end
 
@@ -476,30 +482,55 @@ local function toolDecision(opp)
   return "TOOL_MISSING", name .. " is not in bags or equipped", name
 end
 
+local function memoNode(root, key, create)
+  local child = root[key]
+  if not child and create then
+    child = {}
+    root[key] = child
+  end
+  return child
+end
+
 function Planner:GetPersonalQuote(opp, n)
   n = math.floor(tonumber(n) or 0)
   if n < 0 then
     n = 0
   end
   local session = OnyxiaGold.SessionState
-  local generation = session and session.generation or 0
   local cashNow = session and session.cash or 0
-  local memoKey = tostring(opp) .. ":" .. tostring(n) .. ":" .. tostring(generation) .. ":" .. tostring(cashNow)
   local memo = self.quoteMemo
-  if memo and memo[memoKey] then
-    if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
-      OnyxiaGold.Performance:Add("personalQuoteHits", 1)
+  local node = memo
+  local inputs = recipeInputs(opp)
+  if memo then
+    node = memoNode(memo, opp, true)
+    for i = 1, table.getn(inputs) do
+      local itemID = tonumber(inputs[i] and inputs[i].itemID) or 0
+      local book = session and session.depth and session.depth[itemID]
+      local gen = book and book.generation or 0
+      local bag = 0
+      if session and session.GetBagCount then
+        bag = session:GetBagCount(itemID) or 0
+      end
+      node = memoNode(node, itemID, true)
+      node = memoNode(node, gen, true)
+      node = memoNode(node, bag, true)
     end
-    return memo[memoKey]
+    node = memoNode(node, n, true)
+    if node[cashNow] then
+      if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+        OnyxiaGold.Performance:Add("personalQuoteHits", 1)
+      end
+      return node[cashNow]
+    end
   end
   if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
     OnyxiaGold.Performance:Add("personalQuotes", 1)
   end
-  local lines, cash, economic, _, complete, leftover = planInputs(opp, n)
+  local lines, cash, economic, ownedValue, complete, leftover = planInputs(opp, n)
   if not lines or not complete or not economic then
     local failed = { complete = false }
-    if memo then
-      memo[memoKey] = failed
+    if node then
+      node[cashNow] = failed
     end
     return failed
   end
@@ -511,8 +542,8 @@ function Planner:GetPersonalQuote(opp, n)
     local prev = self:GetPersonalQuote(opp, n - 1)
     if not prev or not prev.complete or not prev.economicInput then
       local failed = { complete = false }
-      if memo then
-        memo[memoKey] = failed
+      if node then
+        node[cashNow] = failed
       end
       return failed
     end
@@ -521,18 +552,25 @@ function Planner:GetPersonalQuote(opp, n)
     marginal = 0
     profit = 0
   end
+  local slots, free = bagSlotsFor(lines)
   local built = {
     cashRequired = cash or 0,
     economicInput = economic,
+    ownedInput = ownedValue or 0,
     leftoverAssets = leftover or 0,
     expectedNetOutput = expected,
     totalProfit = profit,
     marginalProfit = marginal,
     complete = true,
     inputLines = lines,
+    newSlotsRequired = slots,
+    peakSlots = slots,
+    leftoverSlots = slots,
+    slots = slots,
+    freeSlots = free,
   }
-  if memo then
-    memo[memoKey] = built
+  if node then
+    node[cashNow] = built
   end
   return built
 end
@@ -540,10 +578,12 @@ end
 local function maxCraftsForCash(opp, owned, deployable, capMax)
   local lo = 0
   local hi = capMax
+  local planner = OnyxiaGold.ActionPlanner
   while lo < hi do
     local mid = math.floor((lo + hi + 1) / 2)
-    local cash, _, _, complete = craftCost(opp, mid, owned)
-    if complete and cash and cash <= deployable then
+    local personal = planner and planner.GetPersonalQuote and planner:GetPersonalQuote(opp, mid)
+    local cash = personal and personal.cashRequired
+    if personal and personal.complete and cash and cash <= deployable then
       lo = mid
     else
       hi = mid - 1
@@ -727,29 +767,24 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
     goldSkillGap = goldSkillGap,
   }
 
-  local function commit(n)
-    local cash, economic, ownedValue, complete = craftCost(opp, n, owned)
-    if not complete or not cash then
-      return nil
-    end
-    local netPer = tonumber(opp.netRevenue) or 0
-    return n * netPer - economic, cash, economic, ownedValue
-  end
-
   local function accept(n)
-    local profit, cash, economic, ownedValue = commit(n)
-    if not profit then
+    local personal = self:GetPersonalQuote(opp, n)
+    if not personal or not personal.complete then
       return false
     end
-    local lines = planInputs(opp, n)
+    local cash = personal.cashRequired or 0
+    local economic = personal.economicInput or 0
+    local ownedValue = personal.ownedInput or 0
+    local profit = personal.totalProfit or 0
     person.executableCrafts = n
     person.sensibleCrafts = n
-    person.inputLines = lines
+    person.inputLines = personal.inputLines
     person.cashRequiredNow = cash
     person.economicInputValue = economic
     person.ownedInputValue = ownedValue
     person.missingInputCost = cash
     person.economicProfit = profit
+    person.bagSlotsUsed = personal.slots or 0
     person.roi = (cash > 0) and (profit / cash) or (ownedValue > 0 and (profit / ownedValue) or 0)
     return true
   end
@@ -974,9 +1009,9 @@ function Planner:Personalize(opp, deployable, afterMailDeployable, ignoreSkill, 
 
   person.state = "WAITING_FOR_FUNDS"
   person.reason = "Insufficient liquid gold"
-  local cash, _, _, complete = craftCost(opp, 1, owned)
-  if complete then
-    person.cashRequiredNow = cash or 0
+  local personal = self:GetPersonalQuote(opp, 1)
+  if personal and personal.complete then
+    person.cashRequiredNow = personal.cashRequired or 0
     person.missingInputCost = person.cashRequiredNow
   end
   return person
@@ -1970,16 +2005,28 @@ local function flipGroups()
       if OnyxiaGold.GetAuctionHouseCutBPS then
         cutBPS = OnyxiaGold:GetAuctionHouseCutBPS()
       end
-      local found = LotsApi.FlipMargin({
-        levels = book.levels,
-        covered = book.covered,
-        vendorUnit = seed.vendorPrice,
-        hours = 24,
-        cutBPS = cutBPS,
-        ownMinimum = own,
-        name = seed.name,
-        itemID = itemID,
-      })
+      local found
+      local generation = book and book.generation or 0
+      if seed.unit and seed.count and seed.profit and generation == (seed.bookGeneration or 0) then
+        found = seed
+        if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+          OnyxiaGold.Performance:Add("flipCacheHits", 1)
+        end
+      else
+        found = LotsApi.FlipMargin({
+          levels = book.levels,
+          covered = book.covered,
+          vendorUnit = seed.vendorPrice,
+          hours = 24,
+          cutBPS = cutBPS,
+          ownMinimum = own,
+          name = seed.name,
+          itemID = itemID,
+        })
+        if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+          OnyxiaGold.Performance:Add("flipReprices", 1)
+        end
+      end
       if found and (tonumber(found.profit) or 0) > 0 then
         found.confidence = tonumber(seed.confidence) or found.confidence
         if not found.confidence and LotsApi.FlipConfidence then
@@ -2289,25 +2336,56 @@ function Planner:Refresh()
     return profit
   end
   local function bestKnownPath()
-    local Plan = OnyxiaGold.SessionPlan
-    if not Plan or not Plan.KnownCandidates or not Plan.BestPath then
+    if OnyxiaGold.PerfIsolate == "paths" then
       return nil
     end
-    local candidates = Plan.KnownCandidates()
-    local open = {}
-    for i = 1, table.getn(candidates) do
-      local row = candidates[i]
-      if row and not committedSpells[row.spellID] then
-        table.insert(open, row)
+    local Plan = OnyxiaGold.SessionPlan
+    local cache = OnyxiaGold.CandidateCache
+    if not Plan or not Plan.PricePath or not cache or not cache.PathSeeds then
+      return nil
+    end
+    local seeds = cache:PathSeeds()
+    if table.getn(seeds) < 1 then
+      return nil
+    end
+    local best
+    local bestScore
+    local sessionGen = OnyxiaGold.SessionState and OnyxiaGold.SessionState.generation or 0
+    for i = 1, table.getn(seeds) do
+      if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
+        OnyxiaGold.RefreshSchedule.Tick()
+      end
+      local seed = seeds[i]
+      local first = seed and seed.first
+      local second = seed and seed.second
+      local blocked = committedSpells[first and first.spellID] or committedSpells[second and second.spellID]
+      local key = tostring(first and first.spellID) .. ":" .. tostring(second and second.spellID)
+      if seed and first and second and not blocked and not failedPaths[key] then
+        local priced = seed.priced
+        local fresh = seed.pricedGeneration == sessionGen and not seed.dirty and priced ~= nil
+        if not fresh then
+          if seed.dirty then
+            if OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+              OnyxiaGold.Performance:Add("pathRepricesAfterReservation", 1)
+            end
+          elseif OnyxiaGold.Performance and OnyxiaGold.Performance.Add then
+            OnyxiaGold.Performance:Add("pathPrices", 1)
+          end
+          priced = Plan.PricePath(first, second)
+          seed.priced = priced
+          seed.pricedGeneration = sessionGen
+          seed.dirty = false
+        end
+        if priced and (tonumber(priced.profit) or 0) > 0 then
+          local score = pathScore(priced)
+          if not best or score > bestScore then
+            best = priced
+            bestScore = score
+          end
+        end
       end
     end
-    if table.getn(open) < 2 then
-      return nil
-    end
-    return Plan.BestPath(open, function(first, second)
-      local key = tostring(first and first.spellID) .. ":" .. tostring(second and second.spellID)
-      return failedPaths[key] and true or false
-    end)
+    return best
   end
   local function takePath(priced)
     local Plan = OnyxiaGold.SessionPlan
@@ -2377,7 +2455,8 @@ function Planner:Refresh()
   local oppCount = table.getn(opps)
 
   local guard = 0
-  while guard < 20 do
+  local actionCap = self.MAX_ACTIONS or 20
+  while guard < actionCap do
     guard = guard + 1
     local bestI
     local bestScore
@@ -2462,6 +2541,15 @@ function Planner:Refresh()
       end
       local person = people[bestI]
       if self:ReserveSelected(person) then
+        local cache = OnyxiaGold.CandidateCache
+        if cache and cache.MarkReserved and person.inputLines then
+          for lineIndex = 1, table.getn(person.inputLines) do
+            local line = person.inputLines[lineIndex]
+            if line and line.itemID then
+              cache:MarkReserved(line.itemID, person.opp and person.opp.requirements and person.opp.requirements.cooldown)
+            end
+          end
+        end
         if OnyxiaGold.SessionState and OnyxiaGold.SessionState:IsActive() then
           remaining = OnyxiaGold.SessionState:RemainingCash()
         else
@@ -2481,8 +2569,25 @@ function Planner:Refresh()
       if OnyxiaGold.RefreshSchedule and OnyxiaGold.RefreshSchedule.Tick then
         OnyxiaGold.RefreshSchedule.Tick()
       end
-      local person = self:Personalize(opps[i], remaining, afterMailBudget(remaining))
-      people[i] = person
+      local person = people[i]
+      if not person or dirty[i] ~= false then
+        local cap = { executable = true }
+        if OnyxiaGold.Capabilities and OnyxiaGold.Capabilities.CanExecute then
+          cap = OnyxiaGold.Capabilities:CanExecute(opps[i].requirements)
+        end
+        if cap and not cap.executable and not self:ShowAboveSkill() and not self:ShowBeyondGold() then
+          person = {
+            opp = opps[i],
+            state = cap.missingSkill and "LOCKED_SKILL" or (cap.missingRecipe and "LOCKED_RECIPE" or "LOCKED_PROFESSION"),
+            sensibleCrafts = 0,
+            cashRequiredNow = 0,
+            reason = cap.reason,
+          }
+        else
+          person = self:Personalize(opps[i], remaining, afterMailBudget(remaining))
+        end
+        people[i] = person
+      end
       if person.opp and person.opp.shatterDecision == "sell" then
         table.insert(self.actions, {
           kind = "SELL",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.43 — Zero stutter
+
+- A refresh may take many frames. The default slice is under a millisecond, and no slice is allowed to run to 4 ms. Heavy planning pauses while a buy, a post, a scan, or a transaction settle is in progress.
+- A running plan whose inputs changed is aborted and is not published. The last finished plan stays on screen. One replacement is scheduled.
+- Moving items between bag slots does not replan when the counts, free slots, and partial stacks are the same. Opening the auction house and ordinary browsing do not discover the market.
+- Quote cache keys are the book id, its generation, the quantity, and the bag and capital limits. They do not serialise auction depth. Reserving one item drops that book's generation only.
+- Character replans price the path seeds already built with the market. They do not walk the profession book again.
+- /og pause stops economic planning. /og perf mode safe|aggressive and /og perf isolate paths|flips|bags|ui|planner|none are runtime controls. /og perf still prints the counters.
+
 ## 0.1.42 — Performance rescue
 
 - Market and recipe changes build a candidate cache. Bag, gold, mail, and bank changes only reallocate that cache into a personal plan. Opening the auction house, the mailbox, a profession window, or /og does not rediscover the market.

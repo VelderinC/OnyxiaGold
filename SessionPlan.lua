@@ -237,6 +237,94 @@ local function mailWords(step)
   return "Open the mailbox. Take mail."
 end
 
+-- Display only. The profit is the one number this craft or flip already
+-- has. It is copied onto each of that plan's buys and is not split.
+local function noteBuyProfit(steps, profit)
+  profit = tonumber(profit)
+  if not profit then
+    return
+  end
+  for i = 1, nitems(steps) do
+    local step = steps[i]
+    if step and step.role == "buy" then
+      step.rowProfit = profit
+    end
+  end
+end
+
+-- The posted product's expected sale, already on the post step. A buy
+-- with no matching post keeps the sale blank.
+local function notePostedSale(steps)
+  local posts = {}
+  local plain = {}
+  for i = 1, nitems(steps) do
+    local step = steps[i]
+    if step and step.role == "post" then
+      local proceeds = tonumber(step.proceeds)
+      local count = tonumber(step.count)
+      if proceeds and proceeds > 0 and count and count > 0 then
+        if step.craft ~= nil then
+          posts[step.craft] = step
+        else
+          table.insert(plain, step)
+        end
+      end
+    end
+  end
+  local onlyPlain = nil
+  if nitems(plain) == 1 then
+    onlyPlain = plain[1]
+  end
+  for i = 1, nitems(steps) do
+    local step = steps[i]
+    if step and step.role == "buy" and step.saleCopper == nil then
+      local post = nil
+      if step.craft ~= nil then
+        post = posts[step.craft]
+      else
+        post = onlyPlain
+      end
+      if post then
+        step.saleCopper = tonumber(post.proceeds)
+        step.saleCount = tonumber(post.count)
+        step.saleName = post.name
+      end
+    end
+  end
+end
+
+function Plan.BuyLine(step)
+  if not step then
+    return ""
+  end
+  local count = tonumber(step.count) or 0
+  local name = step.name or "item"
+  local cash = tonumber(step.cash)
+  local text
+  if cash and cash > 0 then
+    text = string.format("Buy %d %s for %s.", count, name, Plan.Plain(cash))
+  else
+    text = string.format("Buy %d %s.", count, name)
+  end
+  local saleCount = tonumber(step.saleCount)
+  local saleCash = tonumber(step.saleCopper)
+  if saleCount and saleCount > 0 and saleCash and saleCash > 0 then
+    local saleName = step.saleName
+    if type(saleName) == "string" and saleName ~= "" then
+      text = text .. string.format(" Sell %d %s for %s.", saleCount, saleName, Plan.Plain(saleCash))
+    else
+      text = text .. string.format(" Sell %d for %s.", saleCount, Plan.Plain(saleCash))
+    end
+  end
+  if step.rowProfit ~= nil then
+    local profit = tonumber(step.rowProfit)
+    if profit then
+      text = text .. " Profit " .. Plan.Plain(profit) .. "."
+    end
+  end
+  return text
+end
+
 function Plan.StepLine(step)
   if not step then
     return ""
@@ -244,7 +332,7 @@ function Plan.StepLine(step)
   local count = tonumber(step.count) or 0
   local name = step.name or "item"
   if step.role == "buy" then
-    return string.format("Buy %d %s. Maximum spend %s.", count, name, Plan.Plain(step.cash))
+    return Plan.BuyLine(step)
   elseif step.role == "craft" then
     return string.format("Craft %d %s. %d to craft.", count, name, count)
   elseif step.role == "post" then
@@ -311,6 +399,7 @@ end
 function Plan.Present(spec)
   local plan = Plan.Compose(spec)
   local steps = plan.steps
+  notePostedSale(steps)
   for i = 1, nitems(steps) do
     local step = steps[i]
     local hint = Plan.WindowHint(step, spec)
@@ -419,6 +508,7 @@ function Plan.StepsFromAction(action, names)
       proceeds = tonumber(info.proceeds) or 0,
     })
   end
+  noteBuyProfit(steps, action.expectedProfit)
   return steps
 end
 
@@ -444,6 +534,7 @@ function Plan.FlipSteps(found, groupId)
       hold = deposit,
       unit = found.unit,
       name = name,
+      rowProfit = tonumber(found.profit),
     },
     {
       role = "post",
@@ -743,6 +834,7 @@ local function stepsForCraft(candidate, priced, craftId, stoneStep)
       proceeds = proceeds,
     })
   end
+  noteBuyProfit(steps, priced.profit)
   return steps
 end
 
@@ -1090,6 +1182,7 @@ local function stepsForPath(priced, craftId)
       proceeds = proceeds,
     })
   end
+  noteBuyProfit(steps, priced.profit)
   return steps
 end
 

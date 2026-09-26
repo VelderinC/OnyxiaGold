@@ -17,6 +17,83 @@ local function nitems(t)
   return 0
 end
 
+local function checkBuyReadout(check, Plan, sharedSteps, cleared, sharedGold)
+  local flipLine = sharedSteps[1] and sharedSteps[1].line or ""
+  local saleMinusBuy = Plan.Plain((tonumber(cleared.proceeds) or 0) - (tonumber(cleared.cash) or 0))
+  check("a flip buy row names the lot, the same item's sale, and the plan profit",
+    Plan.Plain(cleared.cash) == "10g"
+    and Plan.Plain(cleared.proceeds) == "19g"
+    and Plan.Plain(cleared.profit) == "8g"
+    and saleMinusBuy == "9g"
+    and string.find(flipLine, "Buy 20 Ore for 10g. Sell 20 Ore for 19g. Profit 8g.", 1, true)
+    and not string.find(flipLine, "Profit 9g.", 1, true)
+    and string.find(sharedGold.nextLine or "", "Maximum spend 10g.", 1, true))
+
+  local twoReagent = Plan.Portfolio({
+    {
+      name = "Potion",
+      output = "Potion",
+      profit = 1,
+      net = 100000,
+      crafts = 1,
+      profession = "Alchemy",
+      reagents = {
+        { itemID = 201, count = 1, name = "Herb" },
+        { itemID = 202, count = 1, name = "Vial" },
+      },
+    },
+  }, {
+    cash = 1000000,
+    depth = {
+      [201] = { levels = { { p = 10000, q = 1, n = 1, s = 1 } }, covered = 1 },
+      [202] = { levels = { { p = 20000, q = 1, n = 1, s = 1 } }, covered = 1 },
+    },
+  })
+  local twoSteps = twoReagent and twoReagent.steps or {}
+  local herbLine = ""
+  local vialLine = ""
+  for i = 1, nitems(twoSteps) do
+    local step = twoSteps[i]
+    if step.role == "buy" and step.name == "Herb" then
+      herbLine = step.line or ""
+    elseif step.role == "buy" and step.name == "Vial" then
+      vialLine = step.line or ""
+    end
+  end
+  local sharedProfit = Plan.Plain(twoReagent and twoReagent.profit or 0)
+  local herbAlone = Plan.Plain(100000 - 10000)
+  local vialAlone = Plan.Plain(100000 - 20000)
+  check("a reagent buy shows its own cost, the posted sale, and the craft profit",
+    twoReagent
+    and sharedProfit == "7g"
+    and herbAlone == "9g"
+    and vialAlone == "8g"
+    and string.find(herbLine, "Buy 1 Herb for 1g. Sell 1 Potion for 10g. Profit 7g.", 1, true)
+    and string.find(vialLine, "Buy 1 Vial for 2g. Sell 1 Potion for 10g. Profit 7g.", 1, true)
+    and not string.find(herbLine, "Profit 9g.", 1, true)
+    and not string.find(vialLine, "Profit 8g.", 1, true))
+
+  local unpriced = Plan.Present({
+    cash = 100000,
+    profit = 10000,
+    steps = {
+      { role = "buy", name = "Ore", count = 4 },
+      { role = "buy", name = "Herb", count = 2, cash = 20000 },
+    },
+  })
+  local unpricedSteps = unpriced and unpriced.steps or {}
+  check("a buy row leaves a missing price or sale blank",
+    unpriced
+    and unpricedSteps[1]
+    and unpricedSteps[2]
+    and unpricedSteps[1].line == "Buy 4 Ore."
+    and unpricedSteps[2].line == "Buy 2 Herb for 2g."
+    and not string.find(unpricedSteps[1].line, "Sell", 1, true)
+    and not string.find(unpricedSteps[1].line, "Profit", 1, true)
+    and not string.find(unpricedSteps[2].line, "Sell", 1, true)
+    and not string.find(unpricedSteps[2].line, "Profit", 1, true))
+end
+
 function Tests:Run()
   local Lots = OnyxiaGold.Lots
   local lines = {}
@@ -888,6 +965,8 @@ function Tests:Run()
     and reservedBuys == 1
     and reservedLot.spent == 100000)
 
+  checkBuyReadout(check, Plan, sharedSteps, cleared, sharedGold)
+
   local enchantClosed = Plan.Present({
     cash = 0,
     profit = 10000,
@@ -1026,7 +1105,9 @@ function Tests:Run()
     and string.find(fromMailLine, "Open the mailbox. Take gold.", 1, true) == 1
     and not string.find(fromMailLine, "Open the Auction House.", 1, true)
     and string.find(fromMailSteps[2].line or "", "Open the Auction House.", 1, true)
-    and string.find(fromMailSteps[2].line or "", "Buy 5 Dreamfoil.", 1, true))
+    and string.find(fromMailSteps[2].line or "", "Buy 5 Dreamfoil for 5g.", 1, true)
+    and string.find(fromMailSteps[2].line or "", "Sell 1 Elixir for 8g.", 1, true)
+    and string.find(fromMailSteps[2].line or "", "Profit 3g.", 1, true))
 
   local personal = Plan.Portfolio({ bankCraft }, {
     cash = 200000,
@@ -1133,6 +1214,8 @@ function Tests:Run()
     and Session:GetBagCount(102) == 0
     and Session:CoveredQuantity(102) == 1
     and string.find(keptLine, "Open the Auction House. Buy 1 Herb. Maximum spend 1g. Expected session profit +9g.", 1, true)
+    and string.find(keptSteps[1].line or "", "Buy 1 Herb for 1g. Sell 1 Flask for 10g. Profit 9g.", 1, true)
+    and not string.find(keptSteps[1].line or "", "Vial", 1, true)
     and string.find(keptSteps[2].line or "", "Open Alchemy. Craft 1 Vial.", 1, true)
     and not string.find(keptLine, "Craft", 1, true)
     and not string.find(keptLine, "Vial", 1, true))
